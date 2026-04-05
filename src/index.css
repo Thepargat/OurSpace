@@ -1,0 +1,114 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..600;1,9..144,300..600&family=Outfit:wght@300;400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Fraunces", ui-serif, Georgia, serif;
+  --font-outfit: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  
+  --color-linen: #F8F4EE;
+  --color-parchment: #EDE8DF;
+  --color-stone: #D4CEC4;
+  --color-charcoal: #1A1A1A;
+  --color-warm-grey: #6B6560;
+  --color-brass: #B8955A;
+  --color-brass-light: #F0E4CC;
+  --color-white: #FFFFFF;
+
+  /* Unprefixed versions for inline styles */
+  --linen: #F8F4EE;
+  --parchment: #EDE8DF;
+  --stone: #D4CEC4;
+  --charcoal: #1A1A1A;
+  --warm-grey: #6B6560;
+  --brass: #B8955A;
+  --brass-light: #F0E4CC;
+
+  --radius-pill: 9999px;
+}
+
+@layer base {
+  html, body, #root {
+    @apply h-full w-full bg-linen;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+
+  body {
+    @apply font-sans text-charcoal antialiased select-none;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: none;
+  }
+
+  /* Allow text selection only on readable content */
+  .selectable {
+    @apply select-text;
+  }
+
+  input, textarea {
+    @apply select-text;
+  }
+
+  /* Placeholder styling */
+  ::placeholder {
+    @apply font-outfit italic text-stone;
+  }
+}
+
+@layer utilities {
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  /* Long text gradient fade-out */
+  .text-fade-out {
+    mask-image: linear-gradient(to bottom, black 70%, transparent 100%);
+  }
+
+  /* Background variations */
+  .bg-texture-1 {
+    background-image: radial-gradient(#D4CEC4 0.5px, transparent 0.5px);
+    background-size: 20px 20px;
+  }
+
+  .bg-texture-2 {
+    background-image: linear-gradient(#D4CEC4 0.5px, transparent 0.5px), linear-gradient(90deg, #D4CEC4 0.5px, transparent 0.5px);
+    background-size: 40px 40px;
+  }
+
+  .bg-texture-3 {
+    background-image: radial-gradient(#D4CEC4 0.5px, transparent 0.5px);
+    background-size: 10px 10px;
+    background-position: 5px 5px;
+  }
+}
+
+/* Button physical weight */
+button:active {
+  transform: scale(0.96);
+  filter: brightness(0.93);
+  transition: transform 0.1s ease, filter 0.1s ease;
+}
+
+/* Shake animation for errors */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-8px); }
+  40% { transform: translateX(8px); }
+  60% { transform: translateX(-6px); }
+  80% { transform: translateX(6px); }
+}
+
+.animate-shake {
+  animation: shake 0.4s ease-in-out;
+}
+
+/* Bounce animation for success */
+@keyframes bounce-success {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.06); }
+}
+
+.animate-bounce-success {
+  animation: bounce-success 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}

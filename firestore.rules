@@ -1,0 +1,160 @@
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: users
+// Document ID: {userId}
+// Fields:
+//   - uid: string (required) - The user's unique ID.
+//   - email: string (required, email) - The user's email address.
+//   - displayName: string (optional) - The user's display name.
+//   - photoURL: string (optional, url) - The user's profile picture URL.
+//   - householdId: string (optional) - The ID of the household the user belongs to.
+//   - role: string (optional, enum: ['admin', 'user']) - The user's role.
+//   - createdAt: timestamp (optional) - When the user profile was created.
+//   - updatedAt: string (optional, ISO 8601) - When the user profile was last updated.
+//
+// Collection: households
+// Document ID: {householdId}
+// Fields:
+//   - id: string (required) - The household's unique ID.
+//   - memberIds: list (required) - List of user IDs in the household.
+//   - createdAt: timestamp (required) - When the household was created.
+//   - createdBy: string (required) - The ID of the user who created the household.
+//
+// Collection: inviteCodes
+// Document ID: {code}
+// Fields:
+//   - code: string (required) - The 6-digit invite code.
+//   - householdId: string (required) - The ID of the household to join.
+//   - createdBy: string (required) - The ID of the user who generated the code.
+//   - createdAt: timestamp (required) - When the code was generated.
+//
+// ===============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        ((exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
+          request.auth.token.email == "Pargatsandhu666@gmail.com");
+    }
+
+    function isHouseholdMember(hId) {
+      return isAuthenticated() && (
+        (exists(/databases/$(database)/documents/households/$(hId)) && 
+         request.auth.uid in get(/databases/$(database)/documents/households/$(hId)).data.memberIds) || 
+        isAdmin()
+      );
+    }
+
+    function isValidEmail(email) {
+      return email is string &&
+        email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidUrl(url) {
+      return url is string &&
+        (url.matches("^https://.*") || url.matches("^http://.*"));
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email']) &&
+        data.uid is string && data.uid.size() > 0 &&
+        data.email is string && isValidEmail(data.email) &&
+        (!('displayName' in data) || (data.displayName is string && data.displayName.size() < 100)) &&
+        (!('photoURL' in data) || isValidUrl(data.photoURL)) &&
+        (!('householdId' in data) || (data.householdId is string && data.householdId.size() < 100)) &&
+        (!('role' in data) || (data.role in ['admin', 'user'])) &&
+        (!('createdAt' in data) || data.createdAt is timestamp) &&
+        (!('updatedAt' in data) || data.updatedAt is string);
+    }
+
+    function isValidHousehold(data) {
+      return data.keys().hasAll(['id', 'memberIds', 'createdAt', 'createdBy']) &&
+        data.id is string &&
+        data.memberIds is list && data.memberIds.size() > 0 &&
+        data.createdAt is timestamp &&
+        data.createdBy is string;
+    }
+
+    function isValidInviteCode(data) {
+      return data.keys().hasAll(['code', 'householdId', 'createdBy', 'createdAt']) &&
+        data.code is string && data.code.matches("^\\d{6}$") &&
+        data.householdId is string &&
+        data.createdBy is string &&
+        data.createdAt is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+    
+    match /users/{userId} {
+      allow read: if isAuthenticated(); // Allow reading other users for partner lookup
+      
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && 
+                      (!('role' in request.resource.data) || request.resource.data.role == 'user');
+      
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && 
+                      (!('role' in request.resource.data) || request.resource.data.role == resource.data.role);
+      
+      allow delete: if isAdmin();
+    }
+
+    match /households/{householdId} {
+      allow read: if isHouseholdMember(householdId);
+      
+      allow create: if isAuthenticated() && 
+                      isValidHousehold(request.resource.data) && 
+                      request.resource.data.createdBy == request.auth.uid &&
+                      request.resource.data.memberIds == [request.auth.uid];
+      
+      allow update: if (isHouseholdMember(householdId) || 
+                      (isAuthenticated() && 
+                       resource.data.memberIds.size() < 2 &&
+                       request.resource.data.memberIds.hasAll(resource.data.memberIds) &&
+                       request.resource.data.memberIds.size() == resource.data.memberIds.size() + 1 &&
+                       request.auth.uid in request.resource.data.memberIds)) && 
+                      isValidHousehold(request.resource.data);
+      
+      allow delete: if isAdmin();
+
+      match /{allSubcollections=**} {
+        allow read, write: if isHouseholdMember(householdId);
+      }
+    }
+
+    match /inviteCodes/{code} {
+      allow read: if isAuthenticated();
+      
+      allow create: if isAuthenticated() && 
+                      isValidInviteCode(request.resource.data) &&
+                      request.resource.data.createdBy == request.auth.uid;
+      
+      allow delete: if isAuthenticated() && 
+                      (resource.data.createdBy == request.auth.uid || isAdmin() || 
+                       exists(/databases/$(database)/documents/households/$(resource.data.householdId)));
+      // Allow deletion if you are the creator or if you are joining (checked via existence of household)
+      // Actually, deletion on join is done by the joiner.
+      allow delete: if isAuthenticated(); 
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

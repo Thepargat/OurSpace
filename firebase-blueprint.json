@@ -1,0 +1,197 @@
+{
+  "entities": {
+    "user": {
+      "title": "User Profile",
+      "description": "A user's profile and household association.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "The user's unique ID."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "The user's email address."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "The user's display name."
+        },
+        "photoURL": {
+          "type": "string",
+          "format": "uri",
+          "description": "The user's profile picture URL."
+        },
+        "householdId": {
+          "type": "string",
+          "description": "The ID of the household the user belongs to."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "user"],
+          "description": "The user's role in the application."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the user profile was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the user profile was last updated."
+        }
+      },
+      "required": ["uid", "email"]
+    },
+    "household": {
+      "title": "Household",
+      "description": "A shared space for partners.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The household's unique ID."
+        },
+        "memberIds": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of user IDs in the household."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the household was created."
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "The ID of the user who created the household."
+        }
+      },
+      "required": ["id", "memberIds", "createdAt", "createdBy"]
+    },
+    "inviteCode": {
+      "title": "Invite Code",
+      "description": "A temporary code to join a household.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "The 6-digit invite code."
+        },
+        "householdId": {
+          "type": "string",
+          "description": "The ID of the household to join."
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "The ID of the user who generated the code."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the code was generated."
+        }
+      },
+      "required": ["code", "householdId", "createdBy", "createdAt"]
+    },
+    "event": {
+      "title": "Calendar Event",
+      "description": "A shared event in the household calendar.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["title", "date"]
+    },
+    "grocery": {
+      "title": "Grocery Item",
+      "description": "An item in the shared grocery list.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "quantity": { "type": "string" },
+        "category": { "type": "string" },
+        "completed": { "type": "boolean" },
+        "addedBy": { "type": "string" },
+        "addedByName": { "type": "string" },
+        "addedByPhoto": { "type": "string" },
+        "completedBy": { "type": "string" },
+        "completedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "completed", "category", "addedBy", "createdAt"]
+    },
+    "expense": {
+      "title": "Expense",
+      "description": "A shared expense in the household.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "amount": { "type": "number" },
+        "date": { "type": "string", "format": "date-time" },
+        "category": { "type": "string" }
+      },
+      "required": ["title", "amount", "date"]
+    },
+    "memory": {
+      "title": "Memory",
+      "description": "A shared photo and caption.",
+      "type": "object",
+      "properties": {
+        "imageUrl": { "type": "string", "format": "uri" },
+        "caption": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["imageUrl", "createdAt"]
+    },
+    "note": {
+      "title": "Note",
+      "description": "A shared note or message.",
+      "type": "object",
+      "properties": {
+        "text": { "type": "string" },
+        "authorName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["text", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "user",
+      "description": "Individual user profile documents."
+    },
+    "/households/{householdId}": {
+      "schema": "household",
+      "description": "Household documents shared between partners."
+    },
+    "/households/{householdId}/events/{eventId}": {
+      "schema": "event",
+      "description": "Events subcollection for a household."
+    },
+    "/households/{householdId}/groceries/{groceryId}": {
+      "schema": "grocery",
+      "description": "Groceries subcollection for a household."
+    },
+    "/households/{householdId}/expenses/{expenseId}": {
+      "schema": "expense",
+      "description": "Expenses subcollection for a household."
+    },
+    "/households/{householdId}/memories/{memoryId}": {
+      "schema": "memory",
+      "description": "Memories subcollection for a household."
+    },
+    "/households/{householdId}/notes/{noteId}": {
+      "schema": "note",
+      "description": "Notes subcollection for a household."
+    },
+    "/inviteCodes/{code}": {
+      "schema": "inviteCode",
+      "description": "Temporary invite codes for joining households."
+    }
+  }
+}
