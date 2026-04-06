@@ -41,7 +41,7 @@ function BucketList() {
                 alt={item.title} 
                 className="absolute inset-0"
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-charcoal/80 to-transparent" />
+              <div className="absolute inset-0 bg-gradient-to-t from-[#1A1A1A]/80 to-transparent" />
               <div className="absolute bottom-0 left-0 p-6">
                 <h3 className="font-serif text-2xl text-white mb-1">{item.title}</h3>
                 <p className="font-outfit text-white/80 text-sm tracking-wider uppercase">{item.location}</p>
@@ -50,7 +50,7 @@ function BucketList() {
 
             {/* Back Side */}
             <div 
-              className="absolute inset-0 bg-brass rounded-3xl flex flex-col items-center justify-center"
+              className="absolute inset-0 bg-[#B8955A] rounded-3xl flex flex-col items-center justify-center"
               style={{ backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}
             >
               <motion.div
@@ -77,20 +77,20 @@ export default function TogetherTab() {
 
   return (
     <PageTransition>
-      <div className="flex h-full flex-col pt-16 bg-texture-2">
+      <div className="flex h-full flex-col pt-16 bg-[#F8F4EE]">
         <div className="px-6 mb-6">
-          <h1 className="font-serif text-4xl font-light text-charcoal mb-8">Together</h1>
+          <h1 className="font-serif text-4xl font-light text-[#1A1A1A] mb-8">Together</h1>
           
           {/* Tab Switcher */}
-          <div className="flex gap-8 relative border-b border-stone/50 pb-2">
+          <div className="flex gap-8 relative border-b border-[#D4CEC4]/50 pb-2">
             <button 
-              className={`font-outfit text-lg transition-colors ${activeSubTab === 'memory' ? 'text-charcoal' : 'text-warm-grey'}`}
+              className={`font-outfit text-lg transition-colors ${activeSubTab === 'memory' ? 'text-[#1A1A1A]' : 'text-[#6B6560]'}`}
               onClick={() => setActiveSubTab('memory')}
             >
               Memory Wall
             </button>
             <button 
-              className={`font-outfit text-lg transition-colors ${activeSubTab === 'bucket' ? 'text-charcoal' : 'text-warm-grey'}`}
+              className={`font-outfit text-lg transition-colors ${activeSubTab === 'bucket' ? 'text-[#1A1A1A]' : 'text-[#6B6560]'}`}
               onClick={() => setActiveSubTab('bucket')}
             >
               Bucket List
@@ -98,10 +98,10 @@ export default function TogetherTab() {
             
             {/* Sliding Indicator */}
             <motion.div 
-              className="absolute bottom-0 h-0.5 bg-brass"
+              className="absolute bottom-0 h-0.5 bg-[#B8955A]"
               initial={false}
               animate={{ 
-                left: activeSubTab === 'memory' ? '0%' : '120px', // Approximate widths
+                left: activeSubTab === 'memory' ? '0%' : '135px',
                 width: activeSubTab === 'memory' ? '110px' : '90px'
               }}
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
@@ -117,6 +117,7 @@ export default function TogetherTab() {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
+                transition={{ type: "spring", stiffness: 300, damping: 30 }}
                 className="absolute inset-0"
               >
                 <MemoryWall3D />
@@ -127,6 +128,7 @@ export default function TogetherTab() {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
+                transition={{ type: "spring", stiffness: 300, damping: 30 }}
                 className="absolute inset-0 px-6 overflow-y-auto"
               >
                 <BucketList />

@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState } from "react";
-import { auth, db, googleProvider } from "../firebase";
-import { signInWithPopup, onAuthStateChanged, User } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import { auth, db } from "../firebase";
+import { signInWithPopup, onAuthStateChanged, User, GoogleAuthProvider } from "firebase/auth";
+import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { motion } from "motion/react";
 
 enum OperationType {
@@ -61,10 +61,13 @@ interface AuthState {
   hasHousehold: boolean;
   householdId: string | null;
   error: string;
+  userData?: any;
+  googleAccessToken: string | null;
 }
 
 interface AuthContextType extends AuthState {
   signIn: () => Promise<void>;
+  connectGoogleCalendar: () => Promise<boolean>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -82,7 +85,43 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
     hasHousehold: false,
     householdId: null,
     error: "",
+    googleAccessToken: localStorage.getItem('google_calendar_token'),
   });
+
+  const connectGoogleCalendar = async () => {
+    if (!authState.user) return false;
+    
+    const provider = new GoogleAuthProvider();
+    provider.addScope('https://www.googleapis.com/auth/calendar');
+    
+    try {
+      const result = await signInWithPopup(auth, provider);
+      const credential = GoogleAuthProvider.credentialFromResult(result);
+      const token = credential?.accessToken;
+      
+      if (token) {
+        localStorage.setItem('google_calendar_token', token);
+        
+        // Update user document
+        await updateDoc(doc(db, "users", authState.user.uid), {
+          calendarConnected: true,
+          updatedAt: new Date().toISOString()
+        });
+        
+        setAuthState(prev => ({
+          ...prev,
+          googleAccessToken: token,
+          userData: { ...prev.userData, calendarConnected: true }
+        }));
+        
+        return true;
+      }
+    } catch (error) {
+      console.error("Error connecting Google Calendar:", error);
+      return false;
+    }
+    return false;
+  };
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -90,38 +129,43 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
         const userPath = `users/${currentUser.uid}`;
         try {
           const userDoc = await getDoc(doc(db, "users", currentUser.uid));
-          const householdId = userDoc.exists() ? userDoc.data()?.householdId : null;
+          const userData = userDoc.exists() ? userDoc.data() : null;
+          const householdId = userData?.householdId || null;
           const hasHousehold = !!householdId;
-          setAuthState({
+          setAuthState(prev => ({
+            ...prev,
             user: currentUser,
             loading: false,
             hasHousehold,
             householdId,
+            userData,
             error: "",
-          });
+          }));
         } catch (err: any) {
           console.error("Error checking user doc:", err);
-          // If it's a permission error, we still want to let them in but they might need onboarding
           if (err.code === 'permission-denied') {
-             setAuthState({
+             setAuthState(prev => ({
+              ...prev,
               user: currentUser,
               loading: false,
               hasHousehold: false,
               householdId: null,
               error: "",
-            });
+            }));
           } else {
             handleFirestoreError(err, OperationType.GET, userPath);
           }
         }
       } else {
-        setAuthState({
+        setAuthState(prev => ({
+          ...prev,
           user: null,
           loading: false,
           hasHousehold: false,
           householdId: null,
+          userData: null,
           error: "",
-        });
+        }));
       }
     });
 
@@ -131,7 +175,8 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
   const handleGoogleSignIn = async () => {
     try {
       setAuthState(prev => ({ ...prev, error: "" }));
-      await signInWithPopup(auth, googleProvider);
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
     } catch (err: any) {
       setAuthState(prev => ({ ...prev, error: err.message || "Failed to sign in" }));
     }
@@ -255,7 +300,7 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
   }
 
   return (
-    <AuthContext.Provider value={{ ...authState, signIn: handleGoogleSignIn }}>
+    <AuthContext.Provider value={{ ...authState, signIn: handleGoogleSignIn, connectGoogleCalendar }}>
       {children}
     </AuthContext.Provider>
   );

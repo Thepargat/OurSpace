@@ -25,6 +25,7 @@ import GroceryTab from "./components/tabs/GroceryTab";
 import FinancesTab from "./components/tabs/FinancesTab";
 import TogetherTab from "./components/tabs/TogetherTab";
 import MoreTab from "./components/tabs/MoreTab";
+import SubScreen from "./components/ui/SubScreen";
 import OnboardingStep1 from "./components/onboarding/OnboardingStep1";
 import OnboardingStep2 from "./components/onboarding/OnboardingStep2";
 import OnboardingStep3 from "./components/onboarding/OnboardingStep3";
@@ -34,6 +35,7 @@ function MainApp() {
   const { hasHousehold } = useAuth();
   const [onboardingStep, setOnboardingStep] = useState(1);
   const [activeTab, setActiveTab] = useState("home");
+  const [subScreen, setSubScreen] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showLaunchScreen, setShowLaunchScreen] = useState(true);
   const [isAnniversary, setIsAnniversary] = useState(false);
@@ -100,14 +102,25 @@ function MainApp() {
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', themeColor);
   }, [activeTab]);
 
-  const renderTab = () => {
+  const renderContent = () => {
+    if (subScreen) {
+      switch (subScreen) {
+        case 'grocery': return <GroceryTab key="grocery" onBack={() => setSubScreen(null)} />;
+        case 'meal-planner': return <SubScreen key="meal-planner" title="Meal Planner" onBack={() => setSubScreen(null)} />;
+        case 'chores': return <SubScreen key="chores" title="Chores" onBack={() => setSubScreen(null)} />;
+        case 'notes': return <SubScreen key="notes" title="Shared Notes" onBack={() => setSubScreen(null)} />;
+        case 'savings': return <SubScreen key="savings" title="Savings Goals" onBack={() => setSubScreen(null)} />;
+        case 'settings': return <SubScreen key="settings" title="Settings" onBack={() => setSubScreen(null)} />;
+        default: return null;
+      }
+    }
+
     switch (activeTab) {
       case "home": return <HomeTab key="home" isAnniversary={isAnniversary} onNavigate={setActiveTab} />;
       case "calendar": return <CalendarTab key="calendar" />;
-      case "grocery": return <GroceryTab key="grocery" onBack={() => setActiveTab("home")} />;
       case "finances": return <FinancesTab key="finances" />;
       case "together": return <TogetherTab key="together" />;
-      case "more": return <MoreTab key="more" />;
+      case "more": return <MoreTab key="more" onNavigate={setSubScreen} />;
       default: return <HomeTab key="home" isAnniversary={isAnniversary} onNavigate={setActiveTab} />;
     }
   };
@@ -136,17 +149,33 @@ function MainApp() {
     );
   }
 
+  const isSubScreen = !!subScreen;
+
   return (
     <>
       {showLaunchScreen && <LaunchScreen onComplete={() => setShowLaunchScreen(false)} isAnniversary={isAnniversary} />}
       <NoiseOverlay />
       <OnlineParticles isAnniversary={isAnniversary} bothOnline={true} />
       <ProgressBar isLoading={isLoading} />
-      <div className="relative h-full w-full bg-linen" {...(bind() as any)}>
+      <div className="relative h-full w-full bg-[#F8F4EE] overflow-hidden" {...(bind() as any)}>
         <AnimatePresence mode="wait">
-          {!showLaunchScreen && renderTab()}
+          <motion.div
+            key={subScreen || activeTab}
+            initial={isSubScreen ? { x: "100%" } : { opacity: 0 }}
+            animate={isSubScreen ? { x: 0 } : { opacity: 1 }}
+            exit={isSubScreen ? { x: "100%" } : { opacity: 0 }}
+            transition={{ type: "spring", stiffness: 300, damping: 30 }}
+            className="absolute inset-0"
+          >
+            {renderContent()}
+          </motion.div>
         </AnimatePresence>
-        {!showLaunchScreen && <BottomNav activeTab={activeTab} onChange={setActiveTab} />}
+        {!showLaunchScreen && !isSubScreen && (
+          <BottomNav activeTab={activeTab} onChange={(tab) => {
+            setSubScreen(null);
+            setActiveTab(tab);
+          }} />
+        )}
       </div>
       <Toast 
         isVisible={showToast} 
