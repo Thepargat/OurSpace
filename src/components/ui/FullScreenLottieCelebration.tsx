@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import Lottie from "lottie-react";
 
 interface FullScreenLottieCelebrationProps {
   lottieUrl: string;
@@ -9,18 +8,6 @@ interface FullScreenLottieCelebrationProps {
 }
 
 export default function FullScreenLottieCelebration({ lottieUrl, duration = 2800, onComplete }: FullScreenLottieCelebrationProps) {
-  const [animationData, setAnimationData] = useState<any>(null);
-
-  useEffect(() => {
-    fetch(lottieUrl)
-      .then(res => res.json())
-      .then(data => setAnimationData(data))
-      .catch(err => {
-        console.error("Failed to load celebration Lottie", err);
-        onComplete();
-      });
-  }, [lottieUrl, onComplete]);
-
   useEffect(() => {
     const timer = setTimeout(() => {
       onComplete();
@@ -38,11 +25,16 @@ export default function FullScreenLottieCelebration({ lottieUrl, duration = 2800
         className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none"
       >
         <div className="absolute inset-0 bg-linen/80 backdrop-blur-sm" />
-        {animationData && (
-          <div className="relative z-10 w-full max-w-md">
-            <Lottie animationData={animationData} loop={false} />
-          </div>
-        )}
+        <div className="relative z-10 w-full max-w-md flex flex-col items-center gap-4">
+          <motion.div 
+            animate={{ scale: [1, 1.2, 1] }}
+            transition={{ duration: 1, repeat: Infinity }}
+            className="text-6xl"
+          >
+            ✨
+          </motion.div>
+          <p className="font-serif text-2xl text-charcoal">Celebrating!</p>
+        </div>
       </motion.div>
     </AnimatePresence>
   );

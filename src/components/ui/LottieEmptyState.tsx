@@ -1,29 +1,13 @@
 import { useEffect, useState } from "react";
-import Lottie from "lottie-react";
 import { motion } from "motion/react";
 import { Leaf, Sun, Image as ImageIcon, Coins, Globe2 } from "lucide-react";
 
 interface LottieEmptyStateProps {
-  lottieUrl: string; // URL to fetch JSON from
   message: string;
   fallbackIcon: "plant" | "sun" | "polaroid" | "coins" | "globe";
 }
 
-export default function LottieEmptyState({ lottieUrl, message, fallbackIcon }: LottieEmptyStateProps) {
-  const [animationData, setAnimationData] = useState<any>(null);
-  const [hasError, setHasError] = useState(false);
-
-  useEffect(() => {
-    // Attempt to fetch the Lottie JSON
-    fetch(lottieUrl)
-      .then(res => {
-        if (!res.ok) throw new Error("Network response was not ok");
-        return res.json();
-      })
-      .then(data => setAnimationData(data))
-      .catch(() => setHasError(true));
-  }, [lottieUrl]);
-
+export default function LottieEmptyState({ message, fallbackIcon }: LottieEmptyStateProps) {
   const renderFallback = () => {
     switch (fallbackIcon) {
       case "plant":
@@ -67,11 +51,7 @@ export default function LottieEmptyState({ lottieUrl, message, fallbackIcon }: L
       className="flex flex-col items-center justify-center p-8 text-center"
     >
       <div className="flex h-[120px] w-[120px] items-center justify-center opacity-90">
-        {animationData && !hasError ? (
-          <Lottie animationData={animationData} loop={true} />
-        ) : (
-          renderFallback()
-        )}
+        {renderFallback()}
       </div>
       <p className="mt-4 font-sans text-[15px] text-warm-grey">{message}</p>
     </motion.div>

@@ -18,9 +18,9 @@ import {
 import { db, auth } from '../../firebase';
 import { useAuth } from '../AuthWrapper';
 import PageTransition from '../ui/PageTransition';
-import Lottie from 'lottie-react';
 import confetti from 'canvas-confetti';
 import { format } from 'date-fns';
+import { notifyPartner } from '../../services/notificationService';
 
 // --- Types ---
 
@@ -219,65 +219,66 @@ function AddItemSheet({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={onClose}
-            className="fixed inset-0 z-[60] bg-[#1A1A1A]/40 backdrop-blur-[2px]"
+            className="fixed inset-0 z-[9998] bg-[#1A1A1A]/40 backdrop-blur-[2px]"
           />
           <motion.div
             initial={{ y: '100%' }}
             animate={{ y: 0 }}
             exit={{ y: '100%' }}
             transition={{ type: "spring", stiffness: 300, damping: 28 }}
-            drag="y"
-            dragConstraints={{ top: 0 }}
-            dragElastic={0.1}
-            onDragEnd={(_, info) => {
-              if (info.offset.y > 100 || info.velocity.y > 500) {
-                onClose();
-              }
-            }}
-            className="fixed bottom-0 left-0 right-0 z-[70] bg-[#F8F4EE] rounded-t-[24px] p-6 pb-12 shadow-2xl"
+            className="fixed bottom-0 left-0 right-0 z-[9999] bg-[#F8F4EE] rounded-t-[24px] flex flex-col min-h-[40dvh] max-h-[92dvh] h-auto shadow-2xl"
           >
-            <div className="w-10 h-1 bg-[#D4CEC4] rounded-full mx-auto mb-8" />
+            {/* Drag handle */}
+            <div className="w-full pt-3 pb-1 flex-shrink-0">
+              <div className="w-10 h-1 bg-[#D4CEC4] rounded-full mx-auto" />
+            </div>
             
-            <div className="space-y-6">
-              <input
-                autoFocus
-                type="text"
-                placeholder="What do you need?"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="w-full font-serif text-[24px] text-[#1A1A1A] placeholder-[#D4CEC4] bg-transparent border-none focus:ring-0 p-0"
-              />
-
-              <div className="space-y-2">
-                <label className="font-outfit text-[12px] uppercase tracking-wider text-[#B8955A]">Quantity (optional)</label>
+            {/* Scrollable content */}
+            <div className="flex-1 overflow-y-auto px-6 pt-4 pb-2 no-scrollbar -webkit-overflow-scrolling-touch">
+              <div className="space-y-6">
                 <input
+                  autoFocus
                   type="text"
-                  placeholder="e.g. 2 bags, 500g"
-                  value={quantity}
-                  onChange={(e) => setQuantity(e.target.value)}
-                  className="w-full font-outfit text-[16px] text-[#1A1A1A] placeholder-[#D4CEC4] bg-transparent border-none focus:ring-0 p-0"
+                  placeholder="What do you need?"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full font-serif text-[24px] text-[#1A1A1A] placeholder-[#D4CEC4] bg-transparent border-none focus:ring-0 p-0"
                 />
-              </div>
 
-              <div className="space-y-3">
-                <label className="font-outfit text-[12px] uppercase tracking-wider text-[#B8955A]">Category</label>
-                <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
-                  {CATEGORIES.map(cat => (
-                    <button
-                      key={cat}
-                      onClick={() => setCategory(cat)}
-                      className={`px-4 py-2 rounded-full font-outfit text-[13px] border transition-colors whitespace-nowrap ${
-                        category === cat 
-                          ? 'bg-[#1A1A1A] border-[#1A1A1A] text-white' 
-                          : 'bg-[#EDE8DF] border-[#D4CEC4] text-[#1A1A1A]'
-                      }`}
-                    >
-                      {cat}
-                    </button>
-                  ))}
+                <div className="space-y-2">
+                  <label className="font-outfit text-[12px] uppercase tracking-wider text-[#B8955A]">Quantity (optional)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 2 bags, 500g"
+                    value={quantity}
+                    onChange={(e) => setQuantity(e.target.value)}
+                    className="w-full font-outfit text-[16px] text-[#1A1A1A] placeholder-[#D4CEC4] bg-transparent border-none focus:ring-0 p-0"
+                  />
+                </div>
+
+                <div className="space-y-3">
+                  <label className="font-outfit text-[12px] uppercase tracking-wider text-[#B8955A]">Category</label>
+                  <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
+                    {CATEGORIES.map(cat => (
+                      <button
+                        key={cat}
+                        onClick={() => setCategory(cat)}
+                        className={`px-4 py-2 rounded-full font-outfit text-[13px] border transition-colors whitespace-nowrap ${
+                          category === cat 
+                            ? 'bg-[#1A1A1A] border-[#1A1A1A] text-white' 
+                            : 'bg-[#EDE8DF] border-[#D4CEC4] text-[#1A1A1A]'
+                        }`}
+                      >
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
+            </div>
 
+            {/* Pinned Footer */}
+            <div className="p-6 pb-[calc(16px+env(safe-area-inset-bottom))] border-t border-[#D4CEC4] bg-[#F8F4EE] flex-shrink-0">
               <button
                 disabled={!name.trim()}
                 onClick={handleAdd}
@@ -304,15 +305,6 @@ export default function GroceryTab({ onBack }: { onBack?: () => void }) {
   const [isAdding, setIsAdding] = useState(false);
   const [isCompletedExpanded, setIsCompletedExpanded] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [lottieData, setLottieData] = useState(null);
-
-  // Fetch Lottie data
-  useEffect(() => {
-    fetch('https://assets9.lottiefiles.com/packages/lf20_dmw3t0vg.json')
-      .then(res => res.json())
-      .then(data => setLottieData(data))
-      .catch(err => console.error('Error loading Lottie:', err));
-  }, []);
 
   // --- Data Fetching ---
 
@@ -397,28 +389,49 @@ export default function GroceryTab({ onBack }: { onBack?: () => void }) {
   }, [activeItems]);
 
   const addItem = async (name: string, quantity: string, category: string) => {
-    if (!householdId || !user) return;
+    if (!householdId || !user) {
+      console.error("Missing householdId or user for adding grocery item");
+      return;
+    }
     
-    await addDoc(collection(db, `households/${householdId}/groceries`), {
-      name,
-      quantity,
-      category,
-      completed: false,
-      addedBy: user.uid,
-      addedByName: user.displayName || 'Partner',
-      addedByPhoto: user.photoURL,
-      createdAt: serverTimestamp()
-    });
+    try {
+      await addDoc(collection(db, `households/${householdId}/groceries`), {
+        name,
+        quantity,
+        category,
+        completed: false,
+        addedBy: user.uid,
+        addedByName: user.displayName || 'Partner',
+        addedByPhoto: user.photoURL,
+        createdAt: serverTimestamp()
+      });
+
+      // Trigger Notification
+      await notifyPartner(
+        householdId,
+        user.uid,
+        "Grocery List",
+        `${user.displayName || 'Partner'} added ${name} to the grocery list`,
+        "grocery"
+      );
+    } catch (error) {
+      console.error("Error adding grocery item:", error);
+      alert("Failed to add item. Please try again.");
+    }
   };
 
   const toggleComplete = async (item: GroceryItemData) => {
     if (!householdId || !user) return;
     
-    await updateDoc(doc(db, `households/${householdId}/groceries`, item.id), {
-      completed: !item.completed,
-      completedBy: !item.completed ? user.uid : null,
-      completedAt: !item.completed ? serverTimestamp() : null
-    });
+    try {
+      await updateDoc(doc(db, `households/${householdId}/groceries`, item.id), {
+        completed: !item.completed,
+        completedBy: !item.completed ? user.uid : null,
+        completedAt: !item.completed ? serverTimestamp() : null
+      });
+    } catch (error) {
+      console.error("Error toggling grocery item:", error);
+    }
   };
 
   const deleteItem = async (id: string) => {
@@ -439,7 +452,18 @@ export default function GroceryTab({ onBack }: { onBack?: () => void }) {
 
   return (
     <PageTransition>
-      <div className="flex h-full flex-col bg-[#F8F4EE] relative overflow-hidden">
+      <div 
+        style={{
+          height: 'calc(100dvh - 80px)',
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          WebkitOverflowScrolling: 'touch',
+          overscrollBehavior: 'contain',
+          paddingBottom: 'calc(32px + env(safe-area-inset-bottom))',
+          background: '#F8F4EE'
+        }}
+        className="flex flex-col relative no-scrollbar"
+      >
         {/* Header */}
         <motion.div 
           initial={{ opacity: 0, y: 20, filter: 'blur(4px)' }}
@@ -505,11 +529,7 @@ export default function GroceryTab({ onBack }: { onBack?: () => void }) {
 
         {/* List Content */}
         <div 
-          className="flex-1 overflow-y-auto no-scrollbar"
-          style={{ 
-            paddingBottom: 'calc(120px + env(safe-area-inset-bottom))',
-            WebkitOverflowScrolling: 'touch'
-          }}
+          className="flex-1"
         >
           {isLoading ? (
             <div className="flex items-center justify-center h-40">
@@ -517,13 +537,13 @@ export default function GroceryTab({ onBack }: { onBack?: () => void }) {
             </div>
           ) : activeItems.length === 0 && completedItems.length === 0 ? (
             <div className="flex flex-col items-center justify-center pt-12 px-12 text-center">
-              <div className="w-64 h-64 mb-6">
-                {lottieData && (
-                  <Lottie 
-                    animationData={lottieData}
-                    loop={true} 
-                  />
-                )}
+              <div className="w-64 h-64 mb-6 flex items-center justify-center">
+                <motion.div 
+                  animate={{ scale: [1, 1.1, 1] }}
+                  transition={{ duration: 4, repeat: Infinity }}
+                >
+                  <Plus size={48} className="text-[#D4CEC4]" />
+                </motion.div>
               </div>
               <h2 className="font-serif text-[24px] text-[#1A1A1A] mb-2">Your list is empty</h2>
               <p className="font-outfit text-[14px] text-[#6B6560]">Add your first item</p>
@@ -611,7 +631,22 @@ export default function GroceryTab({ onBack }: { onBack?: () => void }) {
           transition={{ type: "spring", stiffness: 400, damping: 20, delay: 0.5 }}
           whileTap={{ scale: 0.92 }}
           onClick={() => setIsAdding(!isAdding)}
-          className="fixed bottom-20 right-8 w-14 h-14 bg-[#1A1A1A] text-white rounded-full flex items-center justify-center shadow-2xl z-[80]"
+          style={{
+            position: 'fixed',
+            bottom: '100px',
+            right: '24px',
+            zIndex: 90,
+            width: '56px',
+            height: '56px',
+            borderRadius: '999px',
+            background: '#1A1A1A',
+            color: '#FFFFFF',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            boxShadow: '0 8px 32px rgba(26,26,26,0.2)',
+            border: 'none'
+          }}
         >
           <Plus size={24} />
         </motion.button>

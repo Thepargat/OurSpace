@@ -19,10 +19,11 @@ export default function BlurImage({ src, alt, className }: BlurImageProps) {
         initial={{ filter: 'blur(20px)', scale: 1.1 }}
         animate={{ 
           filter: isLoaded ? 'blur(0px)' : 'blur(20px)',
-          scale: isLoaded ? 1 : 1.1
+          scale: isLoaded ? 1 : 1.1,
+          opacity: isLoaded ? 1 : 0.5
         }}
         transition={{ duration: 0.8, ease: "easeOut" }}
-        className={`w-full h-full object-cover ${isLoaded ? 'opacity-100' : 'opacity-0'}`}
+        className="w-full h-full object-cover"
       />
       <AnimatePresence>
         {!isLoaded && (

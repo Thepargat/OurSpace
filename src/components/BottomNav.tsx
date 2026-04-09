@@ -18,11 +18,11 @@ export default function BottomNav({ activeTab, onChange }: BottomNavProps) {
 
   return (
     <nav 
-      className="fixed bottom-0 left-0 right-0 z-40 flex h-[80px] items-center justify-around border-t border-[#D4CEC4]/30 pb-[env(safe-area-inset-bottom)]"
+      className="fixed bottom-0 left-0 right-0 z-[100] flex h-[80px] items-center justify-around border-t border-[#D4CEC4] pb-[env(safe-area-inset-bottom)]"
       style={{
+        background: "rgba(248, 244, 238, 0.92)",
         backdropFilter: "blur(24px)",
         WebkitBackdropFilter: "blur(24px)",
-        background: "rgba(248, 244, 238, 0.85)",
       }}
     >
       {tabs.map((tab) => {

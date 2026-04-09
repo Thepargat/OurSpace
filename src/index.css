@@ -13,6 +13,8 @@
   --color-warm-grey: #6B6560;
   --color-brass: #B8955A;
   --color-brass-light: #F0E4CC;
+  --color-rose-light: #F5E6E0;
+  --color-rose-urgent: #C47B6A;
   --color-white: #FFFFFF;
 
   /* Unprefixed versions for inline styles */
@@ -23,8 +25,13 @@
   --warm-grey: #6B6560;
   --brass: #B8955A;
   --brass-light: #F0E4CC;
+  --rose-light: #F5E6E0;
 
   --radius-pill: 9999px;
+}
+
+:root {
+  color-scheme: light;
 }
 
 @layer base {
@@ -35,9 +42,22 @@
   }
 
   body {
-    @apply font-sans text-charcoal antialiased select-none;
+    @apply font-sans text-charcoal antialiased;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-y: none;
+    padding-top: env(safe-area-inset-top);
+    background: #F8F4EE;
+    position: relative;
+  }
+
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 99999;
+    opacity: 0.03;
+    background-image: url('https://grainy-gradients.vercel.app/noise.svg');
   }
 
   /* Allow text selection only on readable content */

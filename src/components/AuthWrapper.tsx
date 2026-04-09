@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { auth, db } from "../firebase";
 import { signInWithPopup, onAuthStateChanged, User, GoogleAuthProvider } from "firebase/auth";
-import { doc, getDoc, updateDoc } from "firebase/firestore";
+import { doc, getDoc, updateDoc, deleteDoc, setDoc, onSnapshot } from "firebase/firestore";
 import { motion } from "motion/react";
 
 enum OperationType {
@@ -68,6 +68,7 @@ interface AuthState {
 interface AuthContextType extends AuthState {
   signIn: () => Promise<void>;
   connectGoogleCalendar: () => Promise<boolean>;
+  clearGoogleToken: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -85,7 +86,7 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
     hasHousehold: false,
     householdId: null,
     error: "",
-    googleAccessToken: localStorage.getItem('google_calendar_token'),
+    googleAccessToken: null,
   });
 
   const connectGoogleCalendar = async () => {
@@ -93,14 +94,30 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
     
     const provider = new GoogleAuthProvider();
     provider.addScope('https://www.googleapis.com/auth/calendar');
+    // Request offline access to get a refresh token
+    provider.setCustomParameters({
+      access_type: 'offline',
+      prompt: 'consent'
+    });
     
     try {
       const result = await signInWithPopup(auth, provider);
       const credential = GoogleAuthProvider.credentialFromResult(result);
-      const token = credential?.accessToken;
+      const accessToken = credential?.accessToken;
+      // Note: Firebase signInWithPopup might not return the refreshToken directly in the credential
+      // for some configurations. However, we will store what we get.
+      // If it's missing, we'll rely on the user re-authenticating once, but we'll set up the structure.
       
-      if (token) {
-        localStorage.setItem('google_calendar_token', token);
+      if (accessToken) {
+        const tokenData = {
+          accessToken,
+          refreshToken: (result as any)._tokenResponse?.refreshToken || null,
+          expiresAt: Date.now() + 3600 * 1000, // Google tokens usually last 1h
+          updatedAt: new Date().toISOString()
+        };
+
+        // Store in Firestore as requested
+        await setDoc(doc(db, "users", authState.user.uid, "googleCalendarToken", "current"), tokenData);
         
         // Update user document
         await updateDoc(doc(db, "users", authState.user.uid), {
@@ -110,7 +127,7 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
         
         setAuthState(prev => ({
           ...prev,
-          googleAccessToken: token,
+          googleAccessToken: accessToken,
           userData: { ...prev.userData, calendarConnected: true }
         }));
         
@@ -123,40 +140,83 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
     return false;
   };
 
+  const clearGoogleToken = async () => {
+    if (authState.user) {
+      try {
+        await deleteDoc(doc(db, "users", authState.user.uid, "googleCalendarToken", "current"));
+        await updateDoc(doc(db, "users", authState.user.uid), {
+          calendarConnected: false
+        });
+      } catch (err) {
+        console.error("Error clearing token:", err);
+      }
+    }
+    setAuthState(prev => ({ ...prev, googleAccessToken: null }));
+  };
+
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+    let userDocUnsubscribe: (() => void) | null = null;
+
+    const authUnsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
-        const userPath = `users/${currentUser.uid}`;
-        try {
-          const userDoc = await getDoc(doc(db, "users", currentUser.uid));
-          const userData = userDoc.exists() ? userDoc.data() : null;
-          const householdId = userData?.householdId || null;
-          const hasHousehold = !!householdId;
-          setAuthState(prev => ({
-            ...prev,
-            user: currentUser,
-            loading: false,
-            hasHousehold,
-            householdId,
-            userData,
-            error: "",
-          }));
-        } catch (err: any) {
-          console.error("Error checking user doc:", err);
-          if (err.code === 'permission-denied') {
-             setAuthState(prev => ({
+        // First, set the user so we can show the loading state for the doc
+        setAuthState(prev => ({ ...prev, user: currentUser, loading: true }));
+
+        // Listen to the user document in real-time
+        const userDocRef = doc(db, "users", currentUser.uid);
+        
+        if (userDocUnsubscribe) userDocUnsubscribe();
+        
+        userDocUnsubscribe = onSnapshot(userDocRef, async (snapshot) => {
+          if (snapshot.exists()) {
+            const userData = snapshot.data();
+            const householdId = userData?.householdId || null;
+            const hasHousehold = !!householdId;
+
+            // Fetch token from Firestore (one-time fetch is fine here, or we could listen too)
+            const tokenDoc = await getDoc(doc(db, "users", currentUser.uid, "googleCalendarToken", "current"));
+            const googleAccessToken = tokenDoc.exists() ? tokenDoc.data().accessToken : null;
+
+            setAuthState(prev => ({
               ...prev,
-              user: currentUser,
               loading: false,
-              hasHousehold: false,
-              householdId: null,
+              hasHousehold,
+              householdId,
+              userData,
+              googleAccessToken,
               error: "",
             }));
           } else {
-            handleFirestoreError(err, OperationType.GET, userPath);
+            // Create user doc if it doesn't exist
+            const newUser = {
+              uid: currentUser.uid,
+              email: currentUser.email,
+              displayName: currentUser.displayName,
+              photoURL: currentUser.photoURL,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString()
+            };
+            await setDoc(userDocRef, newUser);
+            
+            setAuthState(prev => ({
+              ...prev,
+              loading: false,
+              hasHousehold: false,
+              householdId: null,
+              userData: newUser,
+              googleAccessToken: null,
+              error: "",
+            }));
           }
-        }
+        }, (err: any) => {
+          console.error("Error listening to user doc:", err);
+          setAuthState(prev => ({ ...prev, loading: false, error: "Failed to load user data" }));
+        });
       } else {
+        if (userDocUnsubscribe) {
+          userDocUnsubscribe();
+          userDocUnsubscribe = null;
+        }
         setAuthState(prev => ({
           ...prev,
           user: null,
@@ -164,12 +224,16 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
           hasHousehold: false,
           householdId: null,
           userData: null,
+          googleAccessToken: null,
           error: "",
         }));
       }
     });
 
-    return () => unsubscribe();
+    return () => {
+      authUnsubscribe();
+      if (userDocUnsubscribe) userDocUnsubscribe();
+    };
   }, []);
 
   const handleGoogleSignIn = async () => {
@@ -184,77 +248,95 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
 
   if (authState.loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-linen">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-stone border-t-brass" />
+      <div className="flex min-h-screen items-center justify-center bg-[#F8F4EE]">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#D4CEC4] border-t-[#B8955A]" />
       </div>
     );
   }
 
   if (!authState.user) {
-    const springConfig = { type: "spring" as const, stiffness: 280, damping: 22 }
+    const springConfig = { type: "spring" as const, stiffness: 280, damping: 22 };
 
     return (
       <div 
         style={{
           minHeight: "100dvh",
-          background: "var(--linen)",
+          background: "#F8F4EE",
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
           justifyContent: "center",
-          padding: "40px 24px"
+          padding: "40px 24px",
+          position: "relative",
+          overflow: "hidden"
         }}
       >
-        <div className="relative z-10 flex flex-col items-center text-center">
+        {/* Grain Texture Overlay */}
+        <div 
+          style={{
+            position: "absolute",
+            inset: 0,
+            opacity: 0.03,
+            pointerEvents: "none",
+            backgroundImage: `url('https://grainy-gradients.vercel.app/noise.svg')`,
+            zIndex: 1
+          }}
+        />
+
+        <div className="relative z-10 flex flex-col items-center text-center w-full">
           <motion.h1
-            initial={{ opacity: 0, y: 40 }}
-            animate={{ opacity: 1, y: 0 }}
+            initial={{ opacity: 0, y: 40, filter: "blur(4px)" }}
+            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
             transition={{ ...springConfig, delay: 0 }}
             style={{
               fontFamily: "'Fraunces', serif",
-              fontSize: "48px",
+              fontSize: "52px",
               fontWeight: 300,
-              color: "var(--charcoal)",
+              color: "#1A1A1A",
               margin: 0,
-              letterSpacing: "-1px"
+              letterSpacing: "-2px"
             }}
           >
             OurSpace
           </motion.h1>
 
           <motion.div
-            initial={{ scale: 0 }}
-            animate={{ scale: 1 }}
-            transition={{ type: "spring", stiffness: 400, damping: 18, delay: 0.2 }}
+            initial={{ opacity: 0, y: 40, filter: "blur(4px)" }}
+            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+            transition={{ ...springConfig, delay: 0.08 }}
             style={{
-              width: "8px",
-              height: "8px",
+              width: "10px",
+              height: "10px",
               borderRadius: "50%",
-              background: "var(--brass)",
-              margin: "12px auto"
+              background: "#B8955A",
+              marginTop: "12px"
             }}
           />
 
           <motion.p
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ ...springConfig, delay: 0.25 }}
+            initial={{ opacity: 0, y: 40, filter: "blur(4px)" }}
+            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+            transition={{ ...springConfig, delay: 0.16 }}
             style={{
               fontFamily: "'Outfit', sans-serif",
               fontSize: "16px",
-              color: "var(--warm-grey)",
-              margin: 0
+              color: "#6B6560",
+              marginTop: "16px",
+              marginRight: 0,
+              marginBottom: 0,
+              marginLeft: 0
             }}
           >
             Your private space together
           </motion.p>
           
+          <div style={{ height: "80px" }} />
+
           <motion.button
-            initial={{ opacity: 0, y: 24 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ ...springConfig, delay: 0.35 }}
+            initial={{ opacity: 0, y: 40, filter: "blur(4px)" }}
+            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+            transition={{ type: "spring", stiffness: 280, damping: 22, delay: 0.24 }}
             whileTap={{ scale: 0.96 }}
-            whileHover={{ scale: 1.02 }}
             onClick={handleGoogleSignIn}
             style={{
               display: "flex",
@@ -262,17 +344,16 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
               justifyContent: "center",
               gap: "12px",
               width: "100%",
-              maxWidth: "320px",
-              height: "52px",
-              background: "var(--charcoal)",
+              maxWidth: "300px",
+              height: "56px",
+              background: "#1A1A1A",
               border: "none",
               borderRadius: "999px",
               cursor: "pointer",
               fontFamily: "'Outfit', sans-serif",
               fontSize: "15px",
               fontWeight: 500,
-              color: "white",
-              marginTop: "48px",
+              color: "#FFFFFF",
               boxShadow: "0 8px 32px rgba(26,26,26,0.15)"
             }}
           >
@@ -284,6 +365,21 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
             </svg>
             Continue with Google
           </motion.button>
+
+          <motion.p
+            initial={{ opacity: 0, y: 40, filter: "blur(4px)" }}
+            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+            transition={{ ...springConfig, delay: 0.32 }}
+            style={{
+              fontFamily: "'Outfit', sans-serif",
+              fontSize: "12px",
+              color: "#D4CEC4",
+              textAlign: "center",
+              marginTop: "16px"
+            }}
+          >
+            Private & secure — just for two
+          </motion.p>
 
           {authState.error && (
             <motion.p 
@@ -300,7 +396,7 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
   }
 
   return (
-    <AuthContext.Provider value={{ ...authState, signIn: handleGoogleSignIn, connectGoogleCalendar }}>
+    <AuthContext.Provider value={{ ...authState, signIn: handleGoogleSignIn, connectGoogleCalendar, clearGoogleToken }}>
       {children}
     </AuthContext.Provider>
   );

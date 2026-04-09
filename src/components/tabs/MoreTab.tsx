@@ -1,4 +1,4 @@
-import { ShoppingCart, Utensils, Brush, StickyNote, PiggyBank, Settings, ChevronRight } from 'lucide-react';
+import { ShoppingCart, Utensils, Brush, StickyNote, PiggyBank, Settings, ChevronRight, Heart } from 'lucide-react';
 import { motion } from 'motion/react';
 import PageTransition from '../ui/PageTransition';
 
@@ -8,6 +8,7 @@ const MENU_ITEMS = [
   { id: 'chores', name: 'Chores', subtitle: 'Keep the home running', icon: Brush },
   { id: 'notes', name: 'Shared Notes', subtitle: 'One note, two people', icon: StickyNote },
   { id: 'savings', name: 'Savings Goals', subtitle: 'Working toward something', icon: PiggyBank },
+  { id: 'mood-history', name: 'Mood History', subtitle: 'Track your vibes over time', icon: Heart },
   { id: 'settings', name: 'Settings', subtitle: 'Your profile and preferences', icon: Settings },
 ];
 
@@ -18,7 +19,18 @@ interface MoreTabProps {
 export default function MoreTab({ onNavigate }: MoreTabProps) {
   return (
     <PageTransition>
-      <div className="flex h-full flex-col bg-[#F8F4EE] px-6 pt-16 pb-32 overflow-y-auto">
+      <div 
+        style={{
+          height: 'calc(100dvh - 80px)',
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          WebkitOverflowScrolling: 'touch',
+          overscrollBehavior: 'contain',
+          paddingBottom: 'calc(32px + env(safe-area-inset-bottom))',
+          background: '#F8F4EE'
+        }}
+        className="flex flex-col px-6 pt-16 no-scrollbar"
+      >
         <h1 className="font-serif text-[36px] font-light text-[#1A1A1A] mb-8">More</h1>
 
         <div className="flex flex-col">

@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
-import Lottie from "lottie-react";
 import confetti from "canvas-confetti";
 import { doc, getDoc, collection, query, where, getDocs } from "firebase/firestore";
 import { db, auth } from "../../firebase";
@@ -22,15 +21,8 @@ export default function OnboardingStep4({ onComplete }: OnboardingStep4Props) {
   const { user } = useAuth();
   const [partnerUser, setPartnerUser] = useState<{ photoURL: string; displayName: string } | null>(null);
   const [currentUserProfile, setCurrentUserProfile] = useState<{ photoURL: string; displayName: string } | null>(null);
-  const [lottieData, setLottieData] = useState<any>(null);
 
   useEffect(() => {
-    // Fetch Lottie animation data
-    fetch("https://assets9.lottiefiles.com/packages/lf20_u4yrau.json")
-      .then(res => res.json())
-      .then(data => setLottieData(data))
-      .catch(err => console.error("Error loading Lottie:", err));
-
     // Fetch user profiles
     const fetchProfiles = async () => {
       if (!user) return;
@@ -105,15 +97,9 @@ export default function OnboardingStep4({ onComplete }: OnboardingStep4Props) {
         textAlign: "center"
       }}
     >
-      {/* Lottie celebration animation */}
-      <motion.div {...fadeUp(0)} style={{ width: "200px", height: "200px", margin: "0 auto 32px" }}>
-        {lottieData && (
-          <Lottie
-            animationData={lottieData}
-            loop={false}
-            autoplay={true}
-          />
-        )}
+      {/* Celebration icon instead of Lottie */}
+      <motion.div {...fadeUp(0)} style={{ width: "200px", height: "100px", margin: "0 auto 32px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "64px" }}>
+        ✨
       </motion.div>
 
       {/* Text content */}

@@ -78,7 +78,7 @@ export default function OnlineParticles({ isAnniversary = false, bothOnline = tr
   if (!isAnniversary && !bothOnline) return null;
 
   return (
-    <div className="absolute inset-0 z-20 pointer-events-none">
+    <div className="absolute inset-0 z-0 pointer-events-none">
       <Canvas camera={{ position: [0, 0, 5], fov: 45 }}>
         <ParticleField isAnniversary={isAnniversary} bothOnline={bothOnline} />
       </Canvas>

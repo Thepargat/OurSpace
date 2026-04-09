@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import gsap from "gsap";
-import Lottie from "lottie-react";
 
 interface LaunchScreenProps {
   onComplete: () => void;
@@ -11,16 +10,6 @@ export default function LaunchScreen({ onComplete, isAnniversary = false }: Laun
   const containerRef = useRef<HTMLDivElement>(null);
   const textRef = useRef<HTMLHeadingElement>(null);
   const dotRef = useRef<HTMLSpanElement>(null);
-  const [animationData, setAnimationData] = useState<any>(null);
-
-  useEffect(() => {
-    if (isAnniversary) {
-      fetch("https://assets5.lottiefiles.com/packages/lf20_xwmj0hsk.json") // Using a nice floating polaroid/heart animation as placeholder
-        .then(res => res.json())
-        .then(data => setAnimationData(data))
-        .catch(() => {});
-    }
-  }, [isAnniversary]);
 
   useEffect(() => {
     const tl = gsap.timeline({
@@ -40,7 +29,7 @@ export default function LaunchScreen({ onComplete, isAnniversary = false }: Laun
         { opacity: 0, y: 24 },
         { opacity: 1, y: 0, duration: 0.8, ease: "power3.out" }
       )
-      .to({}, { duration: 2.5 }); // Hold for Lottie
+      .to({}, { duration: 2.5 }); // Hold
     } else {
       tl.fromTo(textRef.current, 
         { opacity: 0, y: 24 },
@@ -59,9 +48,9 @@ export default function LaunchScreen({ onComplete, isAnniversary = false }: Laun
 
   return (
     <div ref={containerRef} className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-linen">
-      {isAnniversary && animationData && (
-        <div className="mb-8 h-48 w-48">
-          <Lottie animationData={animationData} loop={true} />
+      {isAnniversary && (
+        <div className="mb-8 h-48 w-48 flex items-center justify-center text-6xl animate-bounce">
+          ❤️
         </div>
       )}
       <h1 ref={textRef} className="flex items-baseline font-serif text-[48px] font-light text-charcoal">

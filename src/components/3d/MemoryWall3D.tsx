@@ -159,7 +159,7 @@ export default function MemoryWall3D() {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
 
   return (
-    <div className="h-full relative px-6 pb-32 overflow-y-auto">
+    <div className="relative">
       {/* HTML Masonry Grid */}
       <div className="columns-2 gap-4 space-y-4">
         {PHOTOS.map((photo, i) => (

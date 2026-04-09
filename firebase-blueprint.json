@@ -41,6 +41,36 @@
           "type": "string",
           "format": "date-time",
           "description": "When the user profile was last updated."
+        },
+        "isTypingNotes": {
+          "type": "boolean",
+          "description": "Whether the user is currently typing in the shared notes."
+        },
+        "fcmToken": {
+          "type": "string",
+          "description": "The user's Firebase Cloud Messaging token."
+        },
+        "notificationPrefs": {
+          "type": "object",
+          "properties": {
+            "grocery": { "type": "boolean" },
+            "calendar": { "type": "boolean" },
+            "memories": { "type": "boolean" },
+            "finances": { "type": "boolean" },
+            "chores": { "type": "boolean" },
+            "bucket": { "type": "boolean" }
+          },
+          "description": "User's notification preferences."
+        },
+        "anniversaryDate": {
+          "type": "string",
+          "format": "date",
+          "description": "The user's anniversary date."
+        },
+        "birthday": {
+          "type": "string",
+          "format": "date",
+          "description": "The user's birthday."
         }
       },
       "required": ["uid", "email"]
@@ -127,26 +157,64 @@
     },
     "expense": {
       "title": "Expense",
-      "description": "A shared expense in the household.",
+      "description": "A shared expense in the household, often from a receipt scan.",
       "type": "object",
       "properties": {
-        "title": { "type": "string" },
-        "amount": { "type": "number" },
+        "merchant_name": { "type": "string" },
+        "merchant_category": { "type": "string" },
+        "merchant_subcategory": { "type": "string" },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "quantity": { "type": "number" },
+              "unit_price": { "type": "number" },
+              "total_price": { "type": "number" },
+              "category": { "type": "string" }
+            }
+          }
+        },
+        "subtotal": { "type": "number" },
+        "tax_gst": { "type": "number" },
+        "discount": { "type": "number" },
+        "total": { "type": "number" },
+        "currency": { "type": "string" },
         "date": { "type": "string", "format": "date-time" },
-        "category": { "type": "string" }
+        "time": { "type": "string" },
+        "receipt_number": { "type": "string" },
+        "payment_method": { "type": "string" },
+        "receiptURL": { "type": "string", "format": "uri" },
+        "paidBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "source": { "type": "string" }
       },
-      "required": ["title", "amount", "date"]
+      "required": ["merchant_name", "total", "date", "paidBy", "createdAt"]
+    },
+    "budgetSettings": {
+      "title": "Budget Settings",
+      "description": "Monthly budget limit and currency settings.",
+      "type": "object",
+      "properties": {
+        "monthlyLimit": { "type": "number" },
+        "currency": { "type": "string" }
+      },
+      "required": ["monthlyLimit", "currency"]
     },
     "memory": {
       "title": "Memory",
-      "description": "A shared photo and caption.",
+      "description": "A shared photo and caption in the memory wall.",
       "type": "object",
       "properties": {
-        "imageUrl": { "type": "string", "format": "uri" },
+        "imageURL": { "type": "string", "format": "uri" },
         "caption": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "date": { "type": "string", "format": "date-time" },
+        "uploadedBy": { "type": "string" },
+        "uploaderName": { "type": "string" },
+        "uploaderPhoto": { "type": "string" }
       },
-      "required": ["imageUrl", "createdAt"]
+      "required": ["imageURL", "date", "uploadedBy"]
     },
     "note": {
       "title": "Note",
@@ -158,12 +226,157 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["text", "createdAt"]
+    },
+    "bucketItem": {
+      "title": "Bucket List Item",
+      "description": "An item in the shared bucket list.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "location": { "type": "string" },
+        "category": { "type": "string", "enum": ["travel", "experience", "food", "home", "other"] },
+        "notes": { "type": "string" },
+        "imageURL": { "type": "string", "format": "uri" },
+        "addedBy": { "type": "string" },
+        "adderName": { "type": "string" },
+        "addedAt": { "type": "string", "format": "date-time" },
+        "completed": { "type": "boolean" },
+        "completedAt": { "type": "string", "format": "date-time" },
+        "completedBy": { "type": "string" }
+      },
+      "required": ["title", "category", "addedBy", "addedAt", "completed"]
+    },
+    "sharedNote": {
+      "title": "Shared Note",
+      "description": "A single shared note for a household.",
+      "type": "object",
+      "properties": {
+        "content": { "type": "string" },
+        "lastEditedBy": { "type": "string" },
+        "lastEditorName": { "type": "string" },
+        "lastEditedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["content"]
+    },
+    "mealPlan": {
+      "title": "Meal Plan",
+      "description": "A weekly meal plan for a household.",
+      "type": "object",
+      "properties": {
+        "weekStarting": { "type": "string", "format": "date-time" },
+        "monday": { "$ref": "dailyMeals" },
+        "tuesday": { "$ref": "dailyMeals" },
+        "wednesday": { "$ref": "dailyMeals" },
+        "thursday": { "$ref": "dailyMeals" },
+        "friday": { "$ref": "dailyMeals" },
+        "saturday": { "$ref": "dailyMeals" },
+        "sunday": { "$ref": "dailyMeals" },
+        "updatedBy": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["weekStarting"]
+    },
+    "dailyMeals": {
+      "title": "Daily Meals",
+      "type": "object",
+      "properties": {
+        "breakfast": { "type": "string" },
+        "lunch": { "type": "string" },
+        "dinner": { "type": "string" }
+      }
+    },
+    "chore": {
+      "title": "Chore",
+      "description": "A recurring household task.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "frequency": { "type": "string", "enum": ["daily", "weekly", "fortnightly", "monthly"] },
+        "lastCompletedAt": { "type": "string", "format": "date-time" },
+        "lastCompletedBy": { "type": "string" },
+        "nextDueAt": { "type": "string", "format": "date-time" },
+        "assignedTo": { "type": "string" },
+        "points": { "type": "number" }
+      },
+      "required": ["title", "frequency", "nextDueAt"]
+    },
+    "savingsGoal": {
+      "title": "Savings Goal",
+      "description": "A financial goal the household is saving for.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "targetAmount": { "type": "number" },
+        "currentAmount": { "type": "number" },
+        "deadline": { "type": "string", "format": "date" },
+        "category": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "targetAmount", "currentAmount"]
+    },
+    "proactiveAlert": {
+      "title": "Proactive Alert",
+      "description": "An automated notification generated by the Proactive Life Brain.",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["bill", "grocery", "budget", "datenight", "chore", "anniversary", "birthday", "savings"] },
+        "message": { "type": "string" },
+        "detectedAt": { "type": "string", "format": "date-time" },
+        "read": { "type": "boolean" },
+        "priority": { "type": "string", "enum": ["high", "medium", "low"] },
+        "relatedId": { "type": "string" }
+      },
+      "required": ["type", "message", "detectedAt", "read", "priority"]
+    },
+    "mood": {
+      "title": "Mood Check-in",
+      "description": "A user's daily mood check-in.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "mood": { "type": "number", "description": "1-5 scale" },
+        "date": { "type": "string", "format": "date", "description": "YYYY-MM-DD" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "mood", "date", "createdAt"]
+    },
+    "weeklySummary": {
+      "title": "Weekly Life Summary",
+      "description": "A warm AI-generated summary of the household's week.",
+      "type": "object",
+      "properties": {
+        "narrative": { "type": "string" },
+        "stats": {
+          "type": "object",
+          "properties": {
+            "spent": { "type": "number" },
+            "receipts": { "type": "number" },
+            "biggestPurchase": { "type": "string" },
+            "groceriesAdded": { "type": "number" },
+            "groceriesCompleted": { "type": "number" },
+            "choresCompleted": { "type": "object" },
+            "eventsCount": { "type": "number" },
+            "memoriesCount": { "type": "number" },
+            "moods": { "type": "object" },
+            "bucketCompleted": { "type": "number" }
+          }
+        },
+        "weekStart": { "type": "string", "format": "date-time" },
+        "weekEnd": { "type": "string", "format": "date-time" },
+        "generatedAt": { "type": "string", "format": "date-time" },
+        "dismissedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["narrative", "stats", "weekStart", "weekEnd", "generatedAt"]
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": "user",
       "description": "Individual user profile documents."
+    },
+    "/users/{userId}/googleCalendarToken/current": {
+      "schema": "object",
+      "description": "Stored Google OAuth tokens for calendar sync."
     },
     "/households/{householdId}": {
       "schema": "household",
@@ -181,6 +394,10 @@
       "schema": "expense",
       "description": "Expenses subcollection for a household."
     },
+    "/households/{householdId}/budgetSettings/{settingsId}": {
+      "schema": "budgetSettings",
+      "description": "Budget settings for a household."
+    },
     "/households/{householdId}/memories/{memoryId}": {
       "schema": "memory",
       "description": "Memories subcollection for a household."
@@ -188,6 +405,42 @@
     "/households/{householdId}/notes/{noteId}": {
       "schema": "note",
       "description": "Notes subcollection for a household."
+    },
+    "/households/{householdId}/bucketList/{itemId}": {
+      "schema": "bucketItem",
+      "description": "Bucket list subcollection for a household."
+    },
+    "/households/{householdId}/notes/shared": {
+      "schema": "sharedNote",
+      "description": "The single shared note for a household."
+    },
+    "/households/{householdId}/meals/{weekId}": {
+      "schema": "mealPlan",
+      "description": "Weekly meal plans for a household."
+    },
+    "/households/{householdId}/chores/{choreId}": {
+      "schema": "chore",
+      "description": "Chores subcollection for a household."
+    },
+    "/households/{householdId}/savingsGoals/{goalId}": {
+      "schema": "savingsGoal",
+      "description": "Savings goals for a household."
+    },
+    "/households/{householdId}/proactiveAlerts/{alertId}": {
+      "schema": "proactiveAlert",
+      "description": "Automated alerts for a household."
+    },
+    "/households/{householdId}/moods/{moodId}": {
+      "schema": "mood",
+      "description": "Daily mood check-ins for household members."
+    },
+    "/households/{householdId}/weeklySummary/latest": {
+      "schema": "weeklySummary",
+      "description": "The latest weekly summary for a household."
+    },
+    "/households/{householdId}/remindersSent/status": {
+      "schema": "object",
+      "description": "Tracking of sent anniversary and birthday reminders."
     },
     "/inviteCodes/{code}": {
       "schema": "inviteCode",

@@ -175,27 +175,6 @@ export default function OnboardingStep3({ onNext }: OnboardingStep3Props) {
     window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank");
   };
 
-  const handleSkip = async () => {
-    if (!user) return;
-    const householdId = `test_h_${user.uid}`;
-    try {
-      await setDoc(doc(db, "households", householdId), {
-        id: householdId,
-        memberIds: [user.uid],
-        createdAt: serverTimestamp(),
-        createdBy: user.uid,
-        isTest: true
-      });
-      await updateDoc(doc(db, "users", user.uid), {
-        householdId: householdId
-      });
-      onNext();
-    } catch (err) {
-      console.error("Error skipping:", err);
-      onNext(); // Proceed anyway
-    }
-  };
-
   return (
     <motion.div
       initial={{ opacity: 0, x: "100%" }}
@@ -316,25 +295,6 @@ export default function OnboardingStep3({ onNext }: OnboardingStep3Props) {
               Enter a code from your partner
             </p>
           </motion.button>
-        </motion.div>
-
-        {/* Skip for now option */}
-        <motion.div {...fadeUp(0.35)} style={{ marginTop: "24px", textAlign: "center" }}>
-          <button
-            onClick={handleSkip}
-            style={{
-              background: "none",
-              border: "none",
-              fontFamily: "'Outfit', sans-serif",
-              fontSize: "14px",
-              color: "#B8955A",
-              textDecoration: "underline",
-              cursor: "pointer",
-              opacity: 0.8
-            }}
-          >
-            Skip for now (Testing)
-          </button>
         </motion.div>
 
         <AnimatePresence mode="wait">

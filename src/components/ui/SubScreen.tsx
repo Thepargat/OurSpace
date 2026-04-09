@@ -10,7 +10,18 @@ interface SubScreenProps {
 export default function SubScreen({ title, onBack }: SubScreenProps) {
   return (
     <PageTransition>
-      <div className="flex h-full flex-col bg-[#F8F4EE] px-6 pt-16">
+      <div 
+        style={{
+          height: 'calc(100dvh - 80px)',
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          WebkitOverflowScrolling: 'touch',
+          overscrollBehavior: 'contain',
+          paddingBottom: 'calc(32px + env(safe-area-inset-bottom))',
+          background: '#F8F4EE'
+        }}
+        className="flex flex-col px-6 pt-16 no-scrollbar"
+      >
         <div className="flex items-center gap-4 mb-8">
           <motion.button
             whileTap={{ scale: 0.9 }}
