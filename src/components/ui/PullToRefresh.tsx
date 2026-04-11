@@ -42,8 +42,7 @@ export default function PullToRefresh({ onRefresh, children }: PullToRefreshProp
     }
   }, { axis: 'y' });
 
-  // @ts-ignore
-  const bindProps = bind();
+  const bindProps = bind() as Record<string, unknown>;
 
   return (
     <div ref={containerRef} className="h-full w-full overflow-y-auto overflow-x-hidden touch-pan-y" {...bindProps}>

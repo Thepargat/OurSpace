@@ -99,9 +99,9 @@ export default function OnboardingStep3({ onNext }: OnboardingStep3Props) {
         }
       };
 
-      let unsubscribe: any;
-      findAndListen().then(unsub => unsubscribe = unsub);
-      return () => unsubscribe?.();
+      let unsubscribe: (() => void) | undefined;
+      findAndListen().then(unsub => { unsubscribe = unsub; });
+      return () => { unsubscribe?.(); };
     }
   }, [selectedMode, inviteCode, user, onNext]);
 

@@ -38,8 +38,9 @@ export const requestNotificationPermission = async (userId: string) => {
 
     const permission = await Notification.requestPermission();
     if (permission === 'granted') {
+      const env = import.meta.env as Record<string, string | undefined>;
       const token = await getToken(msg, {
-        vapidKey: (import.meta as any).env.VITE_APP_VAPID_KEY || (import.meta as any).env.REACT_APP_VAPID_KEY
+        vapidKey: env.VITE_APP_VAPID_KEY || env.REACT_APP_VAPID_KEY
       });
 
       if (token) {
@@ -63,8 +64,9 @@ export const updateFCMToken = async (userId: string) => {
     if (!msg) return;
 
     if (Notification.permission === 'granted') {
+      const env = import.meta.env as Record<string, string | undefined>;
       const token = await getToken(msg, {
-        vapidKey: (import.meta as any).env.VITE_APP_VAPID_KEY || (import.meta as any).env.REACT_APP_VAPID_KEY
+        vapidKey: env.VITE_APP_VAPID_KEY || env.REACT_APP_VAPID_KEY
       });
       if (token) {
         await updateDoc(doc(db, "users", userId), {
