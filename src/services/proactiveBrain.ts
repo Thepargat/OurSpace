@@ -43,7 +43,7 @@ export const startProactiveBrain = (householdId: string, userId: string, partner
   // 1. Bill Reminders
   const unsubBills = onSnapshot(
     query(collection(db, 'households', householdId, 'events'), where('category', '==', 'bills')),
-    (snap) => {
+    async (snap) => {
       const now = new Date();
       await Promise.all(snap.docs.map(async (d) => {
         const event = d.data();
@@ -118,7 +118,7 @@ export const startProactiveBrain = (householdId: string, userId: string, partner
   // 5. Chore Overdue
   const unsubChores = onSnapshot(
     collection(db, 'households', householdId, 'chores'),
-    (snap) => {
+    async (snap) => {
       const now = new Date();
       await Promise.all(snap.docs.map(async (d) => {
         const chore = d.data();
@@ -172,7 +172,7 @@ export const startProactiveBrain = (householdId: string, userId: string, partner
   // 8. Savings Goal Close
   const unsubSavings = onSnapshot(
     collection(db, 'households', householdId, 'savingsGoals'),
-    (snap) => {
+    async (snap) => {
       await Promise.all(snap.docs.map(async (d) => {
         const goal = d.data();
         const percentage = (goal.currentAmount / goal.targetAmount) * 100;
