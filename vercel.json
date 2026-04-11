@@ -1,1 +1,7 @@
-{\n  "functions": {\n    "api/**/*.js": {\n      "memory": 128,\n      "maxDuration": 10\n    }\n  },\n  "build": {\n    "env": {\n      "NODE_ENV": "production"\n    },\n    "outputDirectory": "dist"\n  }\n}
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "env": {
+    "VITE_MODE": "production"
+  }
+}
