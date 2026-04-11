@@ -188,13 +188,13 @@ function MainApp() {
       );
 
       const snapshot = await getDocs(q);
-      snapshot.docs.forEach(async (d) => {
+      await Promise.all(snapshot.docs.map(async (d) => {
         const event = d.data();
         if (!event.reminderSent) {
           await updateDoc(doc(db, "households", householdId, "events", d.id), {
             reminderSent: true
           });
-          
+
           notifyPartner(
             householdId,
             user.uid,
@@ -203,7 +203,7 @@ function MainApp() {
             "calendar"
           );
         }
-      });
+      }));
     }, 60000); // Check every minute
 
     // Chore Overdue Checker
@@ -217,13 +217,13 @@ function MainApp() {
       );
 
       const snapshot = await getDocs(q);
-      snapshot.docs.forEach(async (d) => {
+      await Promise.all(snapshot.docs.map(async (d) => {
         const chore = d.data();
         if (!chore.overdueNotified) {
           await updateDoc(doc(db, "households", householdId, "chores", d.id), {
             overdueNotified: true
           });
-          
+
           notifyPartner(
             householdId,
             user.uid,
@@ -232,7 +232,7 @@ function MainApp() {
             "chores"
           );
         }
-      });
+      }));
     }, 3600000); // Check every hour
 
     return () => {

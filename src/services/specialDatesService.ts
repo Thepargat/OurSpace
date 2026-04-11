@@ -60,6 +60,7 @@ export const getSpecialDates = async (householdId: string, userId: string, partn
 
   eventsSnap.forEach(d => {
     const data = d.data();
+    if (!data.date || typeof data.date.toDate !== 'function') return;
     const eventDate = data.date.toDate();
     const days = differenceInDays(startOfDay(eventDate), now);
     if (days >= 0 && days <= 60) {

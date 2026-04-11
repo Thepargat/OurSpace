@@ -43,9 +43,9 @@ export const startProactiveBrain = (householdId: string, userId: string, partner
   // 1. Bill Reminders
   const unsubBills = onSnapshot(
     query(collection(db, 'households', householdId, 'events'), where('category', '==', 'bills')),
-    (snap) => {
+    async (snap) => {
       const now = new Date();
-      snap.docs.forEach(async (d) => {
+      await Promise.all(snap.docs.map(async (d) => {
         const event = d.data();
         const date = ensureDate(event.date);
         if (date) {
@@ -55,7 +55,7 @@ export const startProactiveBrain = (householdId: string, userId: string, partner
             await triggerAlert(householdId, 'bill', message, diff === 0 ? 'high' : 'medium', d.id);
           }
         }
-      });
+      }));
     }
   );
 
@@ -118,9 +118,9 @@ export const startProactiveBrain = (householdId: string, userId: string, partner
   // 5. Chore Overdue
   const unsubChores = onSnapshot(
     collection(db, 'households', householdId, 'chores'),
-    (snap) => {
+    async (snap) => {
       const now = new Date();
-      snap.docs.forEach(async (d) => {
+      await Promise.all(snap.docs.map(async (d) => {
         const chore = d.data();
         const nextDue = ensureDate(chore.nextDueAt);
         if (nextDue && nextDue < now) {
@@ -129,7 +129,7 @@ export const startProactiveBrain = (householdId: string, userId: string, partner
           const message = `${chore.title} is overdue — last done ${daysSince} days ago`;
           await triggerAlert(householdId, 'chore', message, 'medium', d.id);
         }
-      });
+      }));
     }
   );
 
@@ -172,15 +172,15 @@ export const startProactiveBrain = (householdId: string, userId: string, partner
   // 8. Savings Goal Close
   const unsubSavings = onSnapshot(
     collection(db, 'households', householdId, 'savingsGoals'),
-    (snap) => {
-      snap.docs.forEach(async (d) => {
+    async (snap) => {
+      await Promise.all(snap.docs.map(async (d) => {
         const goal = d.data();
         const percentage = (goal.currentAmount / goal.targetAmount) * 100;
         if (percentage >= 80 && percentage < 100) {
           const message = `You're ${percentage.toFixed(0)}% of the way to your ${goal.title} goal! 🎯`;
           await triggerAlert(householdId, 'savings', message, 'medium', d.id);
         }
-      });
+      }));
     }
   );
 

@@ -111,7 +111,7 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
       if (accessToken) {
         const tokenData = {
           accessToken,
-          refreshToken: (result as any)._tokenResponse?.refreshToken || null,
+          refreshToken: (result as { _tokenResponse?: { refreshToken?: string } })._tokenResponse?.refreshToken || null,
           expiresAt: Date.now() + 3600 * 1000, // Google tokens usually last 1h
           updatedAt: new Date().toISOString()
         };

@@ -536,7 +536,7 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
       );
       
       if (summary) {
-        if (summary.dismissedAt) {
+        if (summary.dismissedAt && summary.generatedAt) {
           const dismissedDate = summary.dismissedAt.toDate();
           const generatedDate = summary.generatedAt.toDate();
           if (dismissedDate >= generatedDate) {

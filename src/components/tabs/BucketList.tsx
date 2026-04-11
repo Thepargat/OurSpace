@@ -33,11 +33,11 @@ interface BucketItem {
 }
 
 const CATEGORIES = [
-  { id: 'travel', label: 'Travel', icon: '✈️' },
-  { id: 'experience', label: 'Experience', icon: '✨' },
-  { id: 'food', label: 'Food', icon: '🍝' },
-  { id: 'home', label: 'Home', icon: '🏠' },
-  { id: 'other', label: 'Other', icon: '🌟' },
+  { id: 'travel' as const, label: 'Travel', icon: '✈️' },
+  { id: 'experience' as const, label: 'Experience', icon: '✨' },
+  { id: 'food' as const, label: 'Food', icon: '🍝' },
+  { id: 'home' as const, label: 'Home', icon: '🏠' },
+  { id: 'other' as const, label: 'Other', icon: '🌟' },
 ];
 
 export default function BucketList() {
@@ -256,7 +256,7 @@ export default function BucketList() {
               {CATEGORIES.map(cat => (
                 <button
                   key={cat.id}
-                  onClick={() => setCategory(cat.id as any)}
+                  onClick={() => setCategory(cat.id)}
                   className={`px-4 py-2 rounded-full font-outfit text-sm transition-all border ${
                     category === cat.id 
                       ? 'bg-[#B8955A] text-white border-[#B8955A]' 

@@ -487,7 +487,7 @@ export default function FinancesTab() {
     };
   };
 
-  const checkDuplicates = async (receipt: any) => {
+  const checkDuplicates = async (receipt: Pick<Expense, 'merchant_name' | 'total'>) => {
     if (!householdId) return [];
     
     // Query expenses from last 7 days

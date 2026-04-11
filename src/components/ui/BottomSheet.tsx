@@ -46,8 +46,7 @@ export default function BottomSheet({ isOpen, onClose, children, title, footer, 
     }
   }, { filterTaps: true });
 
-  // @ts-ignore
-  const bindProps = bind();
+  const bindProps = bind() as Record<string, unknown>;
 
   if (!mounted) return null;
 

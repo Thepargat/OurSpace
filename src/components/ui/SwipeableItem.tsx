@@ -60,8 +60,7 @@ export default function SwipeableItem({
     }
   });
 
-  // @ts-ignore
-  const bindProps = bind();
+  const bindProps = bind() as Record<string, unknown>;
 
   return (
     <AnimatePresence>
