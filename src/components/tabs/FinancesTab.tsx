@@ -4,30 +4,28 @@
  * Canvas charts, drill-down, item search, ML forecasts, bank import
  */
 
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Plus, Search, X, ChevronLeft, ChevronRight, MoreHorizontal,
-  TrendingUp, TrendingDown, Minus, Upload, Check, Trash2, Pencil,
-  Loader2, ChevronDown, AlertCircle, Filter
+  TrendingUp, TrendingDown, Minus, Check, Trash2,
+  Loader2, ChevronDown
 } from 'lucide-react';
 import { useAuth } from '../AuthWrapper';
 import { db, storage } from '../../firebase';
 import {
   collection, query, onSnapshot, addDoc, serverTimestamp,
-  orderBy, doc, updateDoc, deleteDoc, where, getDocs, Timestamp, setDoc
+  orderBy, doc, deleteDoc, Timestamp
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { format, startOfMonth, endOfMonth, subMonths, addMonths } from 'date-fns';
+import { format, startOfMonth, subMonths, addMonths } from 'date-fns';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import confetti from 'canvas-confetti';
 
-import { BUILT_IN_CATEGORIES, getCategoryDef, colors } from '../../design/tokens';
-import { categorizeItem, saveManualCategory } from '../../lib/categorization';
-import { useCurrencyCountUp, useCountUp, SPRING_DEFAULT, SPRING_BOUNCY, staggerContainer, staggerItem, haptic, fireCelebration } from '../../lib/motion';
+import { getCategoryDef, colors } from '../../design/tokens';
+import { categorizeItem } from '../../lib/categorization';
+import { useCurrencyCountUp, SPRING_DEFAULT, SPRING_BOUNCY, haptic, fireCelebration } from '../../lib/motion';
 import { buildMonthlyAggregates, forecastCategories, calculateBudgetHealth, formatAUD, formatCompact } from '../../lib/cashflow';
 import BankImportFlow from '../finance/BankImportFlow';
-import AttributionPill from '../ui/AttributionPill';
 
 // ============================================================
 // TYPES

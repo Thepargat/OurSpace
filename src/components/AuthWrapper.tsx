@@ -184,9 +184,16 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
             const householdId = userData?.householdId || null;
             const hasHousehold = !!householdId;
 
-            // Fetch token from Firestore (one-time fetch is fine here, or we could listen too)
-            const tokenDoc = await getDoc(doc(db, "users", currentUser.uid, "googleCalendarToken", "current"));
-            const googleAccessToken = tokenDoc.exists() ? tokenDoc.data().accessToken : null;
+            // Fetch token from Firestore
+            let googleAccessToken = null;
+            try {
+              const tokenDoc = await getDoc(doc(db, "users", currentUser.uid, "googleCalendarToken", "current"));
+              if (tokenDoc.exists()) {
+                googleAccessToken = tokenDoc.data().accessToken;
+              }
+            } catch (err) {
+              console.warn("Failed to fetch Google Calendar token:", err);
+            }
 
             setAuthState(prev => ({
               ...prev,

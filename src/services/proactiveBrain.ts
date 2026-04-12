@@ -3,10 +3,8 @@ import {
   query, 
   where, 
   onSnapshot, 
-  addDoc, 
   serverTimestamp, 
-  getDocs, 
-  Timestamp,
+  getDocs,
   doc,
   getDoc,
   setDoc,
@@ -14,7 +12,7 @@ import {
   orderBy
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import { isSameMonth, differenceInDays, startOfMonth, endOfMonth } from 'date-fns';
+import { differenceInDays, startOfMonth, endOfMonth } from 'date-fns';
 
 export type AlertType = 'bill' | 'grocery' | 'budget' | 'datenight' | 'chore' | 'anniversary' | 'birthday' | 'savings';
 

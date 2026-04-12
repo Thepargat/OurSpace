@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { useTexture, shaderMaterial } from '@react-three/drei';
 import * as THREE from 'three';
@@ -66,6 +66,7 @@ const LiquidDisplacementMaterial = shaderMaterial(
 extend({ LiquidDisplacementMaterial });
 
 declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace JSX {
     interface IntrinsicElements {
       liquidDisplacementMaterial: any;
@@ -94,7 +95,7 @@ function LightboxScene({ startIndex, onClose }: { startIndex: number, onClose: (
     if (isTransitioning) return;
     setIsTransitioning(true);
     
-    let startTime = performance.now();
+    const startTime = performance.now();
     const duration = 1200;
     
     const animate = (time: number) => {

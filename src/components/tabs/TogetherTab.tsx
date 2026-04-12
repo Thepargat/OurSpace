@@ -1,10 +1,8 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import Tilt from 'react-parallax-tilt';
 import PageTransition from '../ui/PageTransition';
 import MemoryWall from './MemoryWall';
 import BucketList from './BucketList';
-import BlurImage from '../ui/BlurImage';
 
 export default function TogetherTab() {
   const [activeSubTab, setActiveSubTab] = useState<'memory' | 'bucket'>('memory');

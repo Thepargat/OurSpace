@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import { Plus, Check, Clock, User, Trash2, ChevronLeft } from 'lucide-react';
 import { 
   collection, 
@@ -10,8 +10,7 @@ import {
   deleteDoc, 
   doc, 
   serverTimestamp, 
-  orderBy, 
-  where,
+  orderBy,
   Timestamp
 } from 'firebase/firestore';
 import { db } from '../../firebase';

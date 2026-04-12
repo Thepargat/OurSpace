@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { ChevronLeft, ChevronRight, Loader2, Sparkles, Check, X } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { motion } from 'motion/react';
+import { ChevronLeft, ChevronRight, Loader2, Sparkles } from 'lucide-react';
 import { 
   doc, 
   onSnapshot, 
@@ -18,8 +18,7 @@ import {
   format, 
   isSameDay, 
   addWeeks, 
-  subWeeks,
-  parseISO
+  subWeeks
 } from 'date-fns';
 import BottomSheet from '../ui/BottomSheet';
 import { GoogleGenerativeAI } from "@google/generative-ai";

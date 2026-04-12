@@ -5,7 +5,7 @@
 
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ChevronLeft, Plus, X, Trash2, Check, AlertTriangle, Home, Car, Wrench } from 'lucide-react';
+import { ChevronLeft, Plus, X, Trash2, Check } from 'lucide-react';
 import {
   collection, query, onSnapshot, addDoc, deleteDoc, doc,
   updateDoc, serverTimestamp, orderBy, Timestamp
@@ -13,7 +13,7 @@ import {
 import { db } from '../../firebase';
 import { useAuth } from '../AuthWrapper';
 import { format, addDays, addMonths, addYears, differenceInDays, isPast } from 'date-fns';
-import { SPRING_DEFAULT, SPRING_BOUNCY, haptic } from '../../lib/motion';
+import { SPRING_DEFAULT, haptic } from '../../lib/motion';
 
 // ============================================================
 // TYPES

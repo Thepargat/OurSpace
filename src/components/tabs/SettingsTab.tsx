@@ -7,20 +7,15 @@ import {
   Wallet, 
   ShoppingCart, 
   Calendar, 
-  Camera, 
-  DollarSign, 
-  CheckSquare, 
   Download, 
   Share2, 
   Shield, 
   FileText,
-  LogOut,
   Check,
   Globe,
-  RefreshCcw,
   Link as LinkIcon
 } from 'lucide-react';
-import { doc, updateDoc, onSnapshot, collection, query, where, getDocs, addDoc, setDoc, limit, Timestamp, deleteDoc } from 'firebase/firestore';
+import { doc, updateDoc, onSnapshot, collection, query, where, getDocs, addDoc, setDoc, Timestamp, deleteDoc } from 'firebase/firestore';
 import { format } from 'date-fns';
 import { db, auth } from '../../firebase';
 import { useAuth } from '../AuthWrapper';

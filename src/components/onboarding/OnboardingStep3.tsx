@@ -6,15 +6,12 @@ import {
   getDoc,
   onSnapshot, 
   collection, 
-  query, 
-  where, 
-  getDocs, 
   updateDoc, 
   arrayUnion,
   serverTimestamp,
   deleteDoc
 } from "firebase/firestore";
-import { db, auth } from "../../firebase";
+import { db } from "../../firebase";
 import { useAuth } from "../AuthWrapper";
 
 interface OnboardingStep3Props {

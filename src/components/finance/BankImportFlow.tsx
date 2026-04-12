@@ -5,15 +5,15 @@
 
 import { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Upload, X, Check, AlertTriangle, ChevronRight, FileText, Loader2 } from 'lucide-react';
+import { Upload, X, Check, AlertTriangle, Loader2 } from 'lucide-react';
 import { parseCSV, parsePDF, checkDuplicate, BankTransaction } from '../../lib/bankParsers';
 import { useAuth } from '../AuthWrapper';
 import { db } from '../../firebase';
 import { collection, addDoc, serverTimestamp, getDocs, query, orderBy, limit } from 'firebase/firestore';
-import { BUILT_IN_CATEGORIES, getCategoryDef } from '../../design/tokens';
+import { getCategoryDef } from '../../design/tokens';
 import { categorizeItem } from '../../lib/categorization';
 import { formatAUD } from '../../lib/cashflow';
-import { SPRING_DEFAULT, SPRING_BOUNCY, staggerContainer, staggerItem } from '../../lib/motion';
+import { SPRING_DEFAULT, SPRING_BOUNCY } from '../../lib/motion';
 
 interface Props {
   onClose: () => void;

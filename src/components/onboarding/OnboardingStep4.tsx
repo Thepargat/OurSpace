@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { motion } from "motion/react";
 import confetti from "canvas-confetti";
 import { doc, getDoc, collection, query, where, getDocs } from "firebase/firestore";
-import { db, auth } from "../../firebase";
+import { db } from "../../firebase";
 import { useAuth } from "../AuthWrapper";
 
 interface OnboardingStep4Props {

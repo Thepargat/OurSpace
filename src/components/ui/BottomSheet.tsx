@@ -19,6 +19,10 @@ export default function BottomSheet({ isOpen, onClose, children, title, footer, 
 
   useEffect(() => {
     setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!mounted) return;
     if (isOpen) {
       setY(0);
       document.body.style.overflow = "hidden";
@@ -28,7 +32,7 @@ export default function BottomSheet({ isOpen, onClose, children, title, footer, 
     return () => {
       document.body.style.overflow = "";
     };
-  }, [isOpen]);
+  }, [isOpen, mounted]);
 
   const bind = useDrag(({ down, movement: [, my], velocity: [, vy], direction: [, dy] }) => {
     if (down) {

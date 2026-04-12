@@ -5,8 +5,8 @@
  */
 
 import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { ChevronLeft, Filter } from 'lucide-react';
+import { motion } from 'motion/react';
+import { ChevronLeft } from 'lucide-react';
 import {
   collection, query, orderBy, limit, onSnapshot, Timestamp
 } from 'firebase/firestore';
@@ -14,7 +14,7 @@ import { db } from '../../firebase';
 import { useAuth } from '../AuthWrapper';
 import { format, isToday, isYesterday, formatDistanceToNow } from 'date-fns';
 import AttributionPill from '../ui/AttributionPill';
-import { staggerContainer, staggerItem, SPRING_DEFAULT } from '../../lib/motion';
+import { SPRING_DEFAULT } from '../../lib/motion';
 
 // ============================================================
 // TYPES

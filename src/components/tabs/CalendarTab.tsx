@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   format, 
@@ -14,32 +14,23 @@ import {
   endOfWeek,
   addDays,
   parseISO,
-  isWithinInterval,
-  startOfDay,
-  endOfDay
+  startOfDay
 } from 'date-fns';
 import { 
   ChevronLeft, 
   ChevronRight, 
   Plus, 
   AlertCircle, 
-  Calendar as CalendarIcon,
-  Clock,
-  Tag,
-  FileText,
-  Bell,
-  Repeat,
-  Check
+  Calendar as CalendarIcon
 } from 'lucide-react';
-import { collection, query, where, onSnapshot, addDoc, doc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { collection, query, onSnapshot, addDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { useAuth } from '../AuthWrapper';
 import PageTransition from '../ui/PageTransition';
 import BottomSheet from '../ui/BottomSheet';
-import AnimatedButton from '../ui/AnimatedButton';
 import { syncGoogleCalendar, pushToGoogleCalendar, detectConflicts, CalendarEvent, syncEventToBothPartners } from '../../services/calendarSync';
 import { notifyPartner } from '../../services/notificationService';
-import { Share2, Globe, Lock, RefreshCw } from 'lucide-react';
+import { Globe, Lock, RefreshCw } from 'lucide-react';
 
 const CATEGORIES = [
   { name: 'Work', color: '#8B9EB7' },

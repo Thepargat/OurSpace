@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Plus, Check, MapPin, Tag, User, Loader2, MoreVertical } from 'lucide-react';
+import { Plus, Check, MapPin, User, Loader2 } from 'lucide-react';
 import { 
   collection, 
   query, 

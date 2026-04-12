@@ -5,15 +5,15 @@
 
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ChevronLeft, Plus, X, Check, Trash2, AlertCircle, CreditCard } from 'lucide-react';
+import { ChevronLeft, Plus, X, Trash2 } from 'lucide-react';
 import {
   collection, query, onSnapshot, addDoc, deleteDoc, doc,
-  serverTimestamp, orderBy, getDocs, Timestamp
+  serverTimestamp, orderBy, Timestamp
 } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { useAuth } from '../AuthWrapper';
-import { format, addDays, differenceInDays, isBefore } from 'date-fns';
-import { SPRING_DEFAULT, SPRING_BOUNCY, haptic } from '../../lib/motion';
+import { format, differenceInDays } from 'date-fns';
+import { SPRING_DEFAULT, haptic } from '../../lib/motion';
 import { formatAUD } from '../../lib/cashflow';
 
 // ============================================================

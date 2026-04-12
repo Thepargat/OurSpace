@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { motion, AnimatePresence, useAnimationControls } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Check } from 'lucide-react';
 import { 
   collection, 
@@ -10,16 +10,14 @@ import {
   deleteDoc, 
   doc, 
   serverTimestamp, 
-  orderBy, 
-  where,
+  orderBy,
   getDocs,
   Timestamp
 } from 'firebase/firestore';
-import { db, auth } from '../../firebase';
+import { db } from '../../firebase';
 import { useAuth } from '../AuthWrapper';
 import PageTransition from '../ui/PageTransition';
 import confetti from 'canvas-confetti';
-import { format } from 'date-fns';
 import { notifyPartner } from '../../services/notificationService';
 
 // --- Types ---

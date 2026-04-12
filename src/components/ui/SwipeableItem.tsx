@@ -60,7 +60,7 @@ export default function SwipeableItem({
     }
   });
 
-  // @ts-ignore
+  // @ts-expect-error type binding workaround
   const bindProps = (bind as any)() as Record<string, unknown>;
 
   return (

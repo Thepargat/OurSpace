@@ -98,8 +98,8 @@ export function useCountUp(
 
   useEffect(() => {
     if (!enabled || target === 0) {
-      setValue(target);
-      return;
+      const waitTick = setTimeout(() => setValue(target), 0);
+      return () => clearTimeout(waitTick);
     }
 
     // Check reduced motion

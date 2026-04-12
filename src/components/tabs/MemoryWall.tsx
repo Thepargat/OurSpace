@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Plus, X, Trash2, ChevronLeft, ChevronRight, Camera, Loader2 } from 'lucide-react';
+import { Plus, X, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
 import { 
   collection, 
   query, 
