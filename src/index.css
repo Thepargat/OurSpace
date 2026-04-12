@@ -2,68 +2,52 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
-  --font-serif: "Fraunces", ui-serif, Georgia, serif;
-  --font-outfit: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Noto Serif", ui-serif, Georgia, serif;
+  --font-jakarta: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
   
-  --color-linen: #F8F4EE;
-  --color-parchment: #EDE8DF;
-  --color-stone: #D4CEC4;
-  --color-charcoal: #1A1A1A;
-  --color-warm-grey: #6B6560;
-  --color-brass: #B8955A;
-  --color-brass-light: #F0E4CC;
-  --color-rose-light: #F5E6E0;
-  --color-rose-urgent: #C47B6A;
-  --color-white: #FFFFFF;
+  --color-background: #fcf9f4;
+  --color-surface: #ffffff;
+  --color-on-surface: #1c1c19;
+  --color-on-surface-variant: #603e39;
+  --color-primary: #bc0100;
+  --color-primary-container: #eb0000;
+  --color-secondary: #b40065;
+  --color-secondary-container: #e10080;
+  --color-tertiary: #2f38ff;
+  --color-tertiary-container: #5660ff;
+  --color-surface-container: #f0ede8;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-highest: #e5e2dd;
+  --color-outline: #956d67;
+  --color-outline-variant: #ebbbb4;
 
-  /* Unprefixed versions for inline styles */
-  --linen: #F8F4EE;
-  --parchment: #EDE8DF;
-  --stone: #D4CEC4;
-  --charcoal: #1A1A1A;
-  --warm-grey: #6B6560;
-  --brass: #B8955A;
-  --brass-light: #F0E4CC;
-  --rose-light: #F5E6E0;
-
+  --radius-card: 2rem;
+  --radius-card-lg: 3rem;
   --radius-pill: 9999px;
+  --radius-small: 1rem;
 
-  /* Glassmorphism Tokens */
-  --glass-bg: rgba(255, 255, 255, 0.45);
-  --glass-border: rgba(255, 255, 255, 0.6);
-  --glass-blur: blur(20px);
-  --glass-shadow: 0 12px 40px rgba(0, 0, 0, 0.04), 0 1px 1px rgba(0, 0, 0, 0.02);
-  --noise-url: url('/noise.svg');
+  --shadow-card: 0 20px 40px rgba(28, 28, 25, 0.06);
+  --shadow-nav: 0 -10px 40px rgba(28, 28, 25, 0.04);
+  --shadow-elevated: 0 0 20px rgba(188, 1, 0, 0.3);
 
   /* Animation Keyframes */
-  @keyframes mesh {
-    0% { background-position: 0% 50%; }
-    50% { background-position: 100% 50%; }
-    100% { background-position: 0% 50%; }
-  }
-
-  @keyframes pulse-live {
-    0%, 100% { transform: scale(1); opacity: 1; }
-    50% { transform: scale(1.5); opacity: 0.4; }
-  }
-
   @keyframes heartbeat {
     0% { transform: scale(1); }
-    14% { transform: scale(1.1); }
+    14% { transform: scale(1.3); }
     28% { transform: scale(1); }
-    42% { transform: scale(1.1); }
+    42% { transform: scale(1.3); }
     70% { transform: scale(1); }
-  }
-
-  @keyframes float {
-    0%, 100% { transform: translateY(0px); }
-    50% { transform: translateY(-10px); }
   }
 
   @keyframes aura {
     0%, 100% { opacity: 0.2; transform: scale(1); }
     50% { opacity: 0.5; transform: scale(1.2); }
+  }
+
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
   }
 }
 
