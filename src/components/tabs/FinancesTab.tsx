@@ -605,30 +605,18 @@ function ScanReceiptSheet({
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 pb-8">
-          <input
-            ref={cameraRef}
-            type="file"
-            className="hidden"
-            accept="image/*"
-            capture="environment"
-            onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
-          />
-          <input
-            ref={galleryRef}
-            type="file"
-            className="hidden"
-            accept="image/*"
-            onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
-          />
-
           {/* Upload button */}
           {!scanned && !scanning && (
             <div className="grid grid-cols-1 gap-4">
-              <motion.button
-                whileTap={{ scale: 0.97 }}
-                onClick={() => cameraRef.current?.click()}
-                className="w-full bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl p-8 flex flex-col items-center gap-3 active:bg-[#E5E0D7] transition-colors"
-              >
+              <label className="w-full bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl p-8 flex flex-col items-center gap-3 active:bg-[#E5E0D7] transition-colors cursor-pointer">
+                <input
+                  ref={cameraRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }}
+                  onChange={e => { const f = e.target.files?.[0]; if (f) { e.target.value = ''; handleFile(f); } }}
+                />
                 <div className="w-12 h-12 rounded-full bg-white/50 flex items-center justify-center text-xl shadow-sm">
                   📷
                 </div>
@@ -636,13 +624,16 @@ function ScanReceiptSheet({
                   <p className="font-serif text-[17px] text-[#1A1A1A]">Use Camera</p>
                   <p className="font-outfit text-[12px] text-[#6B6560]">Take a new photo now</p>
                 </div>
-              </motion.button>
+              </label>
 
-              <motion.button
-                whileTap={{ scale: 0.97 }}
-                onClick={() => galleryRef.current?.click()}
-                className="w-full bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl p-8 flex flex-col items-center gap-3 active:bg-[#E5E0D7] transition-colors"
-              >
+              <label className="w-full bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl p-8 flex flex-col items-center gap-3 active:bg-[#E5E0D7] transition-colors cursor-pointer">
+                <input
+                  ref={galleryRef}
+                  type="file"
+                  accept="image/*"
+                  style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }}
+                  onChange={e => { const f = e.target.files?.[0]; if (f) { e.target.value = ''; handleFile(f); } }}
+                />
                 <div className="w-12 h-12 rounded-full bg-white/50 flex items-center justify-center text-xl shadow-sm">
                   🖼️
                 </div>
@@ -650,7 +641,7 @@ function ScanReceiptSheet({
                   <p className="font-serif text-[17px] text-[#1A1A1A]">Photo Library</p>
                   <p className="font-outfit text-[12px] text-[#6B6560]">Choose from your phone</p>
                 </div>
-              </motion.button>
+              </label>
             </div>
           )}
 
