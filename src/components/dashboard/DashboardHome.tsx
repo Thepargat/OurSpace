@@ -18,7 +18,7 @@ import { useAuth } from "../AuthWrapper";
 import { format, isSameMonth, isSameDay, differenceInYears, isSunday } from "date-fns";
 import { getOrUpdateInsights, Insight } from "../../services/relationshipIntelligence";
 import { startProactiveBrain, ProactiveAlert } from "../../services/proactiveBrain";
-import { X, Heart, Gift, Sparkles, RefreshCw, RefreshCcw } from "lucide-react";
+import { X, Heart, Gift, Sparkles, RefreshCw, RefreshCcw, ChevronRight, Calendar, DollarSign, ShoppingCart } from "lucide-react";
 import { saveMood, MOOD_EMOJIS, MoodEntry } from "../../services/moodService";
 import { getSpecialDates, SpecialDate, checkReminders, getEarliestMemory } from "../../services/specialDatesService";
 import { generateWeeklySummary, dismissWeeklySummary, WeeklySummary } from "../../services/weeklySummaryService";
