@@ -2,12 +2,12 @@ importScripts('https://www.gstatic.com/firebasejs/9.0.0/firebase-app-compat.js')
 importScripts('https://www.gstatic.com/firebasejs/9.0.0/firebase-messaging-compat.js');
 
 firebase.initializeApp({
-  apiKey: "AIzaSyAIyStr80n8GcLZ5PnxIAzWbQfAxr4E_OA",
-  authDomain: "mycount-67709.firebaseapp.com",
-  projectId: "mycount-67709",
-  storageBucket: "mycount-67709.firebasestorage.app",
-  messagingSenderId: "573847203736",
-  appId: "1:573847203736:web:88ab8b67e9b9e27f7245ed"
+  apiKey: "AIzaSyAwH-F8niglW37Ab2jkxynU0A39BUOD-UQ",
+  authDomain: "ourspace-898d8.firebaseapp.com",
+  projectId: "ourspace-898d8",
+  storageBucket: "ourspace-898d8.firebasestorage.app",
+  messagingSenderId: "315282314755",
+  appId: "1:315282314755:web:e01f8872da498151aa6036"
 });
 
 const messaging = firebase.messaging();
@@ -92,10 +92,12 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const clonedResponse = response.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(request, clonedResponse);
-          });
+          if (request.method === "GET") {
+            const clonedResponse = response.clone();
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(request, clonedResponse);
+            });
+          }
           return response;
         })
         .catch(() => caches.match(request))
@@ -109,10 +111,13 @@ self.addEventListener("fetch", (event) => {
       return (
         response ||
         fetch(request).then((fetchResponse) => {
-          return caches.open(CACHE_NAME).then((cache) => {
-            cache.put(request, fetchResponse.clone());
-            return fetchResponse;
-          });
+          if (request.method === "GET") {
+            const clonedResponse = fetchResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(request, clonedResponse);
+            });
+          }
+          return fetchResponse;
         })
       );
     })
