@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
+  Check, 
+  Camera, 
+  Loader2,
   ChevronLeft, 
   ChevronRight, 
   CalendarHeart, 
@@ -11,13 +14,14 @@ import {
   Share2, 
   Shield, 
   FileText,
-  Check,
   Globe,
-  Link as LinkIcon
+  Link as LinkIcon 
 } from 'lucide-react';
 import { doc, updateDoc, onSnapshot, collection, query, where, getDocs, addDoc, setDoc, Timestamp, deleteDoc } from 'firebase/firestore';
+import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { format } from 'date-fns';
-import { db, auth } from '../../firebase';
+import { db, auth, storage } from '../../firebase';
+import { updateProfile } from 'firebase/auth';
 import { useAuth } from '../AuthWrapper';
 import { NotificationPrefs } from '../../services/notificationService';
 import BottomSheet from '../ui/BottomSheet';
@@ -128,7 +132,9 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
   const [partnerEmail, setPartnerEmail] = useState("");
   const [isSendingInvite, setIsSendingInvite] = useState(false);
   const [inviteSent, setInviteSent] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Listen to household and partner
   useEffect(() => {
@@ -253,6 +259,45 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
   };
 
+  const handleProfileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !user) return;
+
+    setIsUploading(true);
+    const storageRef = ref(storage, `users/${user.uid}/profile_${Date.now()}.jpg`);
+    const uploadTask = uploadBytesResumable(storageRef, file);
+
+    uploadTask.on('state_changed',
+      (snapshot) => {
+        // Progress can be used here if needed
+      },
+      (error) => {
+        console.error("Upload error:", error);
+        setIsUploading(false);
+        setUploadProgress(null);
+      },
+      async () => {
+        try {
+          const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+          
+          // Update Firestore
+          await updateDoc(doc(db, 'users', user.uid), {
+            photoURL: downloadURL
+          });
+
+          // Update Auth Profile (so user.photoURL reflects it too)
+          await updateProfile(user, { photoURL: downloadURL });
+
+          setIsUploading(false);
+          setUploadProgress(null);
+        } catch (err) {
+          console.error("Profile update error:", err);
+          setIsUploading(false);
+        }
+      }
+    );
+  };
+
   const sendEmailInvite = async () => {
     if (!user || !partnerEmail || !householdId) return;
     setIsSendingInvite(true);
@@ -318,16 +363,36 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
           transition={{ duration: 0.5, delay: 0 }}
           className="mb-8 p-6 bg-[#EDE8DF] rounded-[20px] border border-[#D4CEC4] flex flex-col items-center text-center"
         >
-          <div className="relative mb-4">
-            <div className="w-[72px] h-[72px] rounded-full border-[3px] border-[#F8F4EE] overflow-hidden relative z-10">
+          <div className="relative mb-4 group">
+            <div className="w-[72px] h-[72px] rounded-full border-[3px] border-[#F8F4EE] overflow-hidden relative z-10 transition-transform group-active:scale-95">
               <img 
-                src={user?.photoURL || ''} 
+                src={userData?.photoURL || user?.photoURL || ''} 
                 alt="Profile" 
                 className="w-full h-full object-cover"
                 referrerPolicy="no-referrer"
               />
+              {isUploading && (
+                <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                  <Loader2 className="w-6 h-6 text-white animate-spin" />
+                </div>
+              )}
             </div>
+            
+            <button 
+              onClick={() => fileInputRef.current?.click()}
+              className="absolute bottom-0 right-0 w-7 h-7 bg-[#1A1A1A] rounded-full border-2 border-[#F8F4EE] z-20 flex items-center justify-center text-white shadow-lg active:scale-90 transition-transform"
+            >
+              <Camera size={14} />
+            </button>
             <div className="absolute inset-[-5px] border-[2px] border-[#B8955A] rounded-full" />
+            
+            <input 
+              type="file"
+              ref={fileInputRef}
+              className="hidden"
+              accept="image/*"
+              onChange={handleProfileUpload}
+            />
           </div>
 
           {isEditingName ? (

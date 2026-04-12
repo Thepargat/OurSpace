@@ -25,6 +25,7 @@ import BlurImage from '../ui/BlurImage';
 import BottomSheet from '../ui/BottomSheet';
 import { format } from 'date-fns';
 import { notifyPartner } from '../../services/notificationService';
+import MemoryWall3D from '../3d/MemoryWall3D';
 
 const normalizeDate = (date: any): Date => {
   if (!date) return new Date();
@@ -52,6 +53,7 @@ export default function MemoryWall() {
   const [currentUploadId, setCurrentUploadId] = useState<string | null>(null);
   const [caption, setCaption] = useState('');
   const [selectedMemoryIndex, setSelectedMemoryIndex] = useState<number | null>(null);
+  const [viewMode, setViewMode] = useState<'grid' | 'immersive'>('grid');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Real-time listener
@@ -182,6 +184,30 @@ export default function MemoryWall() {
         )}
       </AnimatePresence>
 
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="font-serif text-2xl text-[#1A1A1A]">
+          {viewMode === 'grid' ? 'Moments' : 'Immersive'}
+        </h2>
+        <div className="flex bg-[#EDE8DF] p-1 rounded-full border border-[#D4CEC4]">
+          <button 
+            onClick={() => setViewMode('grid')}
+            className={`px-4 py-1.5 rounded-full font-outfit text-xs font-medium transition-all ${
+              viewMode === 'grid' ? 'bg-[#1A1A1A] text-white shadow-sm' : 'text-[#6B6560]'
+            }`}
+          >
+            Grid
+          </button>
+          <button 
+            onClick={() => setViewMode('immersive')}
+            className={`px-4 py-1.5 rounded-full font-outfit text-xs font-medium transition-all ${
+              viewMode === 'immersive' ? 'bg-[#1A1A1A] text-white shadow-sm' : 'text-[#6B6560]'
+            }`}
+          >
+            3D
+          </button>
+        </div>
+      </div>
+
       {memories.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-32 text-center px-6">
           <motion.div
@@ -194,40 +220,60 @@ export default function MemoryWall() {
           </motion.div>
         </div>
       ) : (
-        <div className="columns-2 gap-4 space-y-4 pb-32">
-          {memories.map((memory, index) => (
-            <motion.div
-              key={memory.id}
-              initial={{ scale: 0, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ type: "spring", stiffness: 300, damping: 25 }}
-              className="relative break-inside-avoid group"
-              onClick={() => setSelectedMemoryIndex(index)}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                deleteMemory(memory);
-              }}
+        <AnimatePresence mode="wait">
+          {viewMode === 'grid' ? (
+            <motion.div 
+              key="grid"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="columns-2 gap-4 space-y-4 pb-32"
             >
-              <div className="rounded-2xl overflow-hidden bg-[#EDE8DF]">
-                <BlurImage 
-                  src={memory.imageURL} 
-                  alt={memory.caption || "Memory"} 
-                  className="w-full h-auto"
-                />
-              </div>
-              <div className="mt-2 px-1">
-                <p className="font-outfit text-[12px] text-[#6B6560] flex items-center gap-1.5">
-                  <span className="font-medium text-[#1A1A1A]">{memory.uploaderName}</span>
-                  <span className="opacity-40">•</span>
-                  <span>{memory.date ? format(normalizeDate(memory.date), 'MMM d, yyyy') : 'Just now'}</span>
-                </p>
-                {memory.caption && (
-                  <p className="font-outfit text-sm text-[#1A1A1A] mt-1 line-clamp-2">{memory.caption}</p>
-                )}
-              </div>
+              {memories.map((memory, index) => (
+                <motion.div
+                  key={memory.id}
+                  initial={{ scale: 0, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={{ type: "spring", stiffness: 300, damping: 25 }}
+                  className="relative break-inside-avoid group"
+                  onClick={() => setSelectedMemoryIndex(index)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    deleteMemory(memory);
+                  }}
+                >
+                  <div className="rounded-2xl overflow-hidden bg-[#EDE8DF]">
+                    <BlurImage 
+                      src={memory.imageURL} 
+                      alt={memory.caption || "Memory"} 
+                      className="w-full h-auto"
+                    />
+                  </div>
+                  <div className="mt-2 px-1">
+                    <p className="font-outfit text-[12px] text-[#6B6560] flex items-center gap-1.5">
+                      <span className="font-medium text-[#1A1A1A]">{memory.uploaderName}</span>
+                      <span className="opacity-40">•</span>
+                      <span>{memory.date ? format(normalizeDate(memory.date), 'MMM d, yyyy') : 'Just now'}</span>
+                    </p>
+                    {memory.caption && (
+                      <p className="font-outfit text-sm text-[#1A1A1A] mt-1 line-clamp-2">{memory.caption}</p>
+                    )}
+                  </div>
+                </motion.div>
+              ))}
             </motion.div>
-          ))}
-        </div>
+          ) : (
+            <motion.div
+              key="immersive"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="pb-32"
+            >
+              <MemoryWall3D images={memories.map(m => m.imageURL)} />
+            </motion.div>
+          )}
+        </AnimatePresence>
       )}
 
       {/* FAB */}
@@ -244,7 +290,6 @@ export default function MemoryWall() {
         ref={fileInputRef}
         className="hidden"
         accept="image/*"
-        capture="environment"
         onChange={handleFileSelect}
       />
 
