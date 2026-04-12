@@ -656,6 +656,19 @@ function ScanReceiptSheet({
             </div>
           )}
 
+          {/* Scan failed — visible error + retry */}
+          {!scanning && !scanned && error && (
+            <div className="flex flex-col items-center justify-center py-10 gap-4 text-center">
+              <p className="font-outfit text-[14px] text-red-500 bg-red-50 px-4 py-3 rounded-2xl w-full">{error}</p>
+              <button
+                onClick={() => setError('')}
+                className="font-outfit text-[14px] text-[#6B6560] underline"
+              >
+                Try again
+              </button>
+            </div>
+          )}
+
           {/* Results */}
           {scanned && (
             <motion.div
