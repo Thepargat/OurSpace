@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { motion, AnimatePresence } from "motion/react";
+import { motion, AnimatePresence } from "framer-motion";
 import { 
   doc, 
   onSnapshot, 
@@ -106,10 +106,34 @@ const ensureDate = (val: any): Date | null => {
   return isNaN(d.getTime()) ? null : d;
 };
 
-const Section = ({ children, delay = 0, className = "", id }: { children: React.ReactNode, delay?: number, className?: string, id?: string }) => (
+const containerVariants = {
+  hidden: { opacity: 0 },
+  show: {
+    opacity: 1,
+    transition: {
+      staggerChildren: 0.1,
+      delayChildren: 0.2
+    }
+  }
+};
+
+const itemVariants = {
+  hidden: { opacity: 0, y: 30, filter: "blur(8px)" },
+  show: { 
+    opacity: 1, 
+    y: 0, 
+    filter: "blur(0px)",
+    transition: {
+      type: "spring",
+      stiffness: 100,
+      damping: 15
+    }
+  }
+};
+
+const Section = ({ children, className = "", id }: { children: React.ReactNode, className?: string, id?: string }) => (
   <motion.section 
-    layout
-    {...fadeUp(delay)}
+    variants={itemVariants}
     id={id}
     className={`w-full px-5 ${className}`}
   >
@@ -134,15 +158,27 @@ const Card = ({ children, onClick, className = "", layoutId }: { children: React
   </motion.div>
 );
 
-const LivePulse = ({ active }: { active: boolean }) => (
-  <div className="flex items-center gap-2 px-3 py-1 bg-white/40 backdrop-blur-md rounded-full border border-white/50 shadow-sm">
-    <div className="relative w-2 h-2">
-      <div className={`absolute inset-0 rounded-full bg-green-500 ${active ? 'animate-[pulse-live_2s_infinite]' : ''}`} />
-      <div className="absolute inset-0 rounded-full bg-green-500/40 blur-[2px]" />
-    </div>
-    <span className="font-outfit text-[10px] uppercase tracking-widest font-bold text-charcoal/60">
-      {active ? "Live Syncing" : "Connected"}
-    </span>
+const HeartbeatIcon = ({ active }: { active: boolean }) => (
+  <div className="relative flex items-center justify-center">
+    {active && (
+      <div 
+        className="absolute w-12 h-12 bg-rose-urgent/20 rounded-full blur-xl animate-[aura_3s_infinite]" 
+      />
+    )}
+    <motion.div
+      animate={active ? {
+        scale: [1, 1.2, 1, 1.2, 1],
+        transition: {
+          duration: 1.5,
+          repeat: Infinity,
+          ease: "easeInOut",
+          times: [0, 0.1, 0.2, 0.3, 1]
+        }
+      } : {}}
+      className={`relative z-10 p-2 rounded-full ${active ? 'text-rose-urgent' : 'text-stone/40'}`}
+    >
+      <Heart size={20} fill={active ? "currentColor" : "none"} strokeWidth={2.5} />
+    </motion.div>
   </div>
 );
 
@@ -180,7 +216,7 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
   const [loadingGifts, setLoadingGifts] = useState(false);
   const [loadingInsights, setLoadingInsights] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isSyncing, setIsSyncing] = useState(false);
+
   const [startY, setStartY] = useState(0);
   const [pullOffset, setPullOffset] = useState(0);
 
@@ -241,9 +277,7 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
     const userPath = `users/${user.uid}`;
     const unsubUser = onSnapshot(doc(db, "users", user.uid), 
       (snapshot) => {
-        setIsSyncing(true);
         setUserData(snapshot.data());
-        setTimeout(() => setIsSyncing(false), 800);
       },
       (err) => handleError(err, OperationType.GET, userPath)
     );
@@ -304,9 +338,7 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
             if (unsubPartner) unsubPartner();
             unsubPartner = onSnapshot(doc(db, "users", partnerId), 
               (pSnap) => {
-                setIsSyncing(true);
                 setPartnerData(pSnap.data() as PartnerData);
-                setTimeout(() => setIsSyncing(false), 800);
               },
               (err) => handleError(err, OperationType.GET, partnerPath)
             );
@@ -329,9 +361,7 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
           limit(1)
         ),
         (snap) => {
-          setIsSyncing(true);
           setNextEvent(snap.docs[0]?.data() as EventData);
-          setTimeout(() => setIsSyncing(false), 800);
         },
         (err) => handleError(err, OperationType.LIST, eventsPath)
       );
@@ -344,9 +374,7 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
           where("completed", "==", false)
         ),
         (snap) => {
-          setIsSyncing(true);
           setGroceryCount(snap.size);
-          setTimeout(() => setIsSyncing(false), 800);
         },
         (err) => handleError(err, OperationType.LIST, groceriesPath)
       );
@@ -363,9 +391,7 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
               return date && isSameMonth(date, new Date());
             })
             .reduce((acc, curr) => acc + (curr.amount || curr.total || 0), 0);
-          setIsSyncing(true);
           setMonthlySpend(total);
-          setTimeout(() => setIsSyncing(false), 800);
         },
         (err) => handleError(err, OperationType.LIST, expensesPath)
       );
@@ -379,9 +405,7 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
           limit(1)
         ),
         (snap) => {
-          setIsSyncing(true);
           setLastMemory(snap.docs[0]?.data() as MemoryData);
-          setTimeout(() => setIsSyncing(false), 800);
         },
         (err) => handleError(err, OperationType.LIST, memoriesPath)
       );
@@ -395,9 +419,7 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
           limit(1)
         ),
         (snap) => {
-          setIsSyncing(true);
           setLastNote(snap.docs[0]?.data() as NoteData);
-          setTimeout(() => setIsSyncing(false), 800);
         },
         (err) => handleError(err, OperationType.LIST, notesPath)
       );
@@ -735,59 +757,73 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
               `radial-gradient(circle at 20% 20%, ${timeConfig.bg}88 0%, transparent 40%)`,
               `radial-gradient(circle at 80% 80%, ${timeConfig.bg}88 0%, transparent 40%)`,
               `radial-gradient(circle at 20% 20%, ${timeConfig.bg}88 0%, transparent 40%)`,
-            ]
+            ],
+            scale: [1, 1.1, 1],
+            rotate: [0, 5, 0]
           }}
-          transition={{ duration: 15, repeat: Infinity, ease: "linear" }}
-          className="w-full h-full opacity-40 blur-[100px]"
+          transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
+          className="w-full h-full opacity-40 blur-[120px]"
         />
         <div 
-          className="absolute inset-0 opacity-[0.03] mix-blend-overlay pointer-events-none" 
+          className="absolute inset-0 opacity-[0.05] mix-blend-overlay pointer-events-none" 
           style={{ backgroundImage: "var(--noise-url)" }} 
         />
       </div>
 
       {/* Section 1: Time-aware Header */}
       <motion.header
-        initial={{ opacity: 0, y: -20 }}
+        initial={{ opacity: 0, y: -40 }}
         animate={{ opacity: 1, y: 0 }}
+        transition={{ ...spring, delay: 0.1 }}
         onClick={() => onNavigate('calendar')}
-        className="relative z-10 w-full pt-16 pb-12 px-8 cursor-pointer"
+        className="relative z-10 w-full pt-20 pb-16 px-8 cursor-pointer overflow-hidden"
       >
-        <div className="flex justify-between items-start">
-          <div className="space-y-1">
+        <div className="absolute top-0 right-0 w-64 h-64 bg-brass/5 rounded-full blur-[100px] pointer-events-none" />
+        
+        <div className="flex justify-between items-end">
+          <div className="space-y-2">
+            <motion.p 
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: 0.3 }}
+              className="font-outfit text-sm uppercase tracking-[4px] font-bold text-brass mb-2"
+            >
+              {format(currentTime, "EEEE, d MMM")}
+            </motion.p>
             <h1 
-              className="font-serif text-[44px] font-light leading-tight tracking-tight"
+              className="font-serif text-[56px] font-light leading-[1.1] tracking-tight"
               style={{ color: timeConfig.dark ? "#F8F4EE" : "#1A1A1A" }}
             >
-              {timeConfig.greeting}
+              {timeConfig.greeting},<br/>
+              <span className="font-medium italic text-brass">
+                {userData?.displayName?.split(' ')[0] || "Beautiful"}
+              </span>
             </h1>
-            <p 
-              className="font-outfit text-lg opacity-60"
-              style={{ color: timeConfig.dark ? "#D4CEC4" : "#6B6560" }}
-            >
-              {userData?.displayName?.split(' ')[0] || "there"}
-            </p>
           </div>
-          <LivePulse active={isSyncing} />
-        </div>
-        
-        <div className="mt-8 flex items-center gap-3">
-          <div className="h-[1px] flex-1 bg-stone/20" />
-          <p 
-            className="font-outfit text-[11px] uppercase tracking-[3px] font-bold text-brass"
-          >
-            {format(currentTime, "EEEE, d MMM")}
-          </p>
-          <div className="h-[1px] flex-1 bg-stone/20" />
+          <div className="flex flex-col items-center gap-2 pb-2">
+            <HeartbeatIcon active={partnerData?.isOnline || false} />
+            <motion.span 
+              animate={{ opacity: [0.4, 1, 0.4] }}
+              transition={{ duration: 3, repeat: Infinity }}
+              className="font-outfit text-[9px] uppercase tracking-[2px] font-black text-brass/60"
+            >
+              Partner
+            </motion.span>
+          </div>
         </div>
       </motion.header>
 
-      <div className="relative z-10 space-y-8 mt-2">
+      <motion.div 
+        variants={containerVariants}
+        initial="hidden"
+        animate="show"
+        className="relative z-10 space-y-10 mt-2"
+      >
         {/* Coming Up Countdown */}
         {specialDates.length > 0 && (
-          <Section delay={0.03}>
-            <div className="flex items-center justify-between mb-4">
-              <p className="font-outfit text-[11px] tracking-[2px] uppercase text-brass font-medium">
+          <Section>
+            <div className="flex items-center justify-between mb-5">
+              <p className="font-outfit text-xs tracking-[3px] uppercase text-brass font-black">
                 Coming Up
               </p>
             </div>
@@ -835,7 +871,7 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
 
         {/* Anniversary Memory Card */}
         {isAnniversary && earliestMemory && (
-          <Section delay={0.035}>
+          <Section>
             <Card className="p-0 overflow-hidden border-brass/40">
               <div className="relative aspect-video">
                 <img 
@@ -858,7 +894,7 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
         )}
 
         {/* Mood Check-in / Status */}
-        <Section delay={0.04}>
+        <Section>
           <AnimatePresence mode="wait">
             {!myMood ? (
               <motion.div
@@ -920,43 +956,68 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
         </Section>
 
         <Section delay={0.08}>
-          <Card layoutId="partner-status" className="p-4 flex items-center justify-between group active:scale-[0.99] transition-transform">
-            <div className="flex items-center gap-4">
+          <Card 
+            layoutId="partner-status" 
+            className="p-6 flex items-center justify-between group overflow-hidden relative"
+          >
+            {partnerData?.isOnline && (
+              <motion.div 
+                animate={{ 
+                  background: [
+                    "radial-gradient(circle at center, rgba(184, 149, 90, 0.05) 0%, transparent 70%)",
+                    "radial-gradient(circle at center, rgba(184, 149, 90, 0.12) 0%, transparent 70%)",
+                    "radial-gradient(circle at center, rgba(184, 149, 90, 0.05) 0%, transparent 70%)"
+                  ]
+                }}
+                transition={{ duration: 3, repeat: Infinity }}
+                className="absolute inset-0 pointer-events-none"
+              />
+            )}
+            <div className="flex items-center gap-5 relative z-10">
               <div className="relative">
-                <div className="absolute inset-0 bg-brass/20 rounded-full blur-md opacity-0 group-hover:opacity-100 transition-opacity" />
+                <motion.div 
+                  animate={partnerData?.isOnline ? { scale: [1, 1.15, 1], opacity: [0.3, 0.6, 0.3] } : {}}
+                  transition={{ duration: 1.5, repeat: Infinity }}
+                  className="absolute inset-0 bg-brass/30 rounded-full blur-md"
+                />
                 <img 
                   src={partnerData?.photoURL || `https://ui-avatars.com/api/?name=${partnerData?.displayName || 'P'}&background=EDE8DF&color=1A1A1A`}
                   alt=""
-                  className="relative w-14 h-14 rounded-full object-cover border-2 border-white shadow-md"
+                  className="relative w-16 h-16 rounded-full object-cover border-2 border-white shadow-xl"
                   referrerPolicy="no-referrer"
                 />
-                <motion.div 
-                  animate={partnerData?.isOnline ? { scale: [1, 1.2, 1] } : {}}
-                  transition={{ repeat: Infinity, duration: 2 }}
-                  className={`absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full border-2 border-white ${partnerData?.isOnline ? 'bg-green-500' : 'bg-stone'}`}
-                />
+                <div 
+                  className={`absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full border-[3px] border-white flex items-center justify-center ${partnerData?.isOnline ? 'bg-green-500' : 'bg-stone'}`}
+                >
+                  {partnerData?.isOnline && (
+                    <motion.div 
+                      animate={{ scale: [0.6, 1, 0.6] }}
+                      transition={{ repeat: Infinity, duration: 1 }}
+                      className="w-1.5 h-1.5 bg-white rounded-full"
+                    />
+                  )}
+                </div>
               </div>
               <div>
-                <h2 className="font-serif text-[20px] text-charcoal leading-tight">
+                <h2 className="font-serif text-[22px] text-charcoal leading-tight font-medium">
                   {partnerData?.displayName || "Partner"}
                 </h2>
-                <div className="flex items-center gap-1.5 mt-0.5">
-                  <div className={`w-1.5 h-1.5 rounded-full ${partnerData?.isOnline ? 'bg-green-500' : 'bg-stone'}`} />
-                  <p className="font-outfit text-[11px] text-warm-grey uppercase tracking-wider font-bold">
-                    {partnerData?.isOnline ? "Active Now" : lastSeenText}
+                <div className="flex items-center gap-2 mt-1">
+                  <p className="font-outfit text-[12px] text-warm-grey uppercase tracking-[1px] font-bold">
+                    {partnerData?.isOnline ? "Exploring OurSpace" : lastSeenText}
                   </p>
                 </div>
               </div>
             </div>
-            <div className="bg-stone/10 p-2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
-              <ChevronRight size={16} className="text-stone" />
+            <div className="bg-white/40 p-3 rounded-2xl shadow-sm border border-white/50 group-hover:bg-white transition-colors">
+              <ChevronRight size={18} className="text-brass" />
             </div>
           </Card>
         </Section>
 
         {/* Proactive Alerts Row */}
         {alerts.length > 0 && (
-          <Section delay={0.12} className="!px-0">
+          <Section className="!px-0">
             <div className="flex gap-3 overflow-x-auto no-scrollbar px-5 pb-2">
               {alerts.map((alert) => (
                 <motion.div
@@ -998,7 +1059,7 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
         )}
 
         {/* Section 3: Shared Dashboard Bento */}
-        <Section delay={0.16}>
+        <Section>
           <div className="grid grid-cols-12 gap-5 h-[240px]">
             {/* Main Tile: Next Event */}
             <Card 
@@ -1073,7 +1134,7 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
         </Section>
 
         {/* Section 4: Last Memory */}
-        <Section delay={0.24}>
+        <Section>
           <Card layoutId="last-memory" onClick={() => onNavigate('together')} className="group cursor-pointer p-0 border-white/40">
             <div className="aspect-[16/7] w-full relative bg-stone/10 overflow-hidden">
               {lastMemory ? (
@@ -1104,7 +1165,7 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
         </Section>
 
         {/* Section 5: Partner's Last Note */}
-        <Section delay={0.32}>
+        <Section>
           <Card layoutId="last-note" className="p-8 relative min-h-[160px] flex flex-col justify-center border-white/40">
             <span className="absolute top-4 left-6 font-serif text-[100px] text-brass/10 leading-none select-none italic">
               “
@@ -1130,7 +1191,7 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
         </Section>
 
         {/* Section 6: Relationship Insights */}
-        <Section delay={0.4} className="pb-12">
+        <Section className="pb-12">
             <div className="mb-4 flex items-center justify-between">
               <p className="font-outfit text-[11px] tracking-[2px] uppercase text-brass font-bold">
                 Daily Insights
@@ -1276,7 +1337,7 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
               </Card>
           </Section>
         )}
-      </div>
+      </motion.div>
       {/* Gift Suggestions Sheet */}
       <BottomSheet 
         isOpen={!!selectedDateForGifts} 
