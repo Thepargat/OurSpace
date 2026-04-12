@@ -431,6 +431,7 @@ function MainApp() {
         case 'subscriptions': return <SubscriptionsScreen key="subscriptions" onBack={() => setSubScreen(null)} />;
         case 'home-car': return <HomeCarScreen key="home-car" onBack={() => setSubScreen(null)} />;
         case 'activity': return <ActivityFeedScreen key="activity" onBack={() => setSubScreen(null)} />;
+        case 'together': return <TogetherTab key="together" onBack={() => setSubScreen(null)} />;
         default: return null;
       }
     }
