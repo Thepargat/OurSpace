@@ -22,14 +22,14 @@ import {
   parseISO
 } from 'date-fns';
 import BottomSheet from '../ui/BottomSheet';
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 // Initialize Gemini helpers
 const getGeminiModel = () => {
   const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
   if (!apiKey) return null;
-  const ai = new GoogleGenAI({ apiKey });
-  return ai.models.getGenerativeModel({ model: "gemini-flash-latest" });
+  const genAI = new GoogleGenerativeAI(apiKey);
+  return genAI.getGenerativeModel({ model: "gemini-flash-latest" });
 };
 
 interface MealSlot {
@@ -171,17 +171,11 @@ export default function MealPlannerTab({ onBack }: { onBack: () => void }) {
       Return ONLY a JSON array of strings. No explanation. No markdown.
       Example: ["chicken breast", "rice", "broccoli", "olive oil"]`;
 
-      const result = await model.generateContent({
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json"
-        }
-      });
-      
-      const responseText = result.text;
+      const result = await model.generateContent(prompt);
+      const responseText = result.response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '');
       if (!responseText) throw new Error("Empty response from AI");
       
-      const ingredients = JSON.parse(responseText.trim());
+      const ingredients = JSON.parse(responseText);
 
       // Add to groceries
       for (const item of ingredients) {

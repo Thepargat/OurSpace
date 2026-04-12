@@ -44,7 +44,7 @@ self.addEventListener('notificationclick', (event) => {
   );
 });
 
-const CACHE_NAME = "ourspace-v6";
+const CACHE_NAME = "ourspace-v7";
 const STATIC_ASSETS = [
   "/",
   "/index.html",
@@ -87,39 +87,24 @@ self.addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Network-first for API calls (Firebase/Firestore usually handles its own persistence, but we handle general API)
-  if (url.pathname.startsWith("/api") || url.hostname.includes("googleapis.com")) {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          if (request.method === "GET") {
-            const clonedResponse = response.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(request, clonedResponse);
-            });
-          }
-          return response;
-        })
-        .catch(() => caches.match(request))
-    );
-    return;
+  // Network-only for Firestore/Firebase (they handle their own offline state)
+  if (url.hostname.includes("googleapis.com") || url.hostname.includes("firebase")) {
+    return; 
   }
 
-  // Cache-first for static assets
+  // Stale-While-Revalidate for static assets and general requests
   event.respondWith(
-    caches.match(request).then((response) => {
-      return (
-        response ||
-        fetch(request).then((fetchResponse) => {
-          if (request.method === "GET") {
-            const clonedResponse = fetchResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(request, clonedResponse);
-            });
+    caches.open(CACHE_NAME).then((cache) => {
+      return cache.match(request).then((cachedResponse) => {
+        const fetchPromise = fetch(request).then((networkResponse) => {
+          if (request.method === "GET" && networkResponse.status === 200) {
+            cache.put(request, networkResponse.clone());
           }
-          return fetchResponse;
-        })
-      );
+          return networkResponse;
+        }).catch(() => cachedResponse); // Fallback to cache if network fails completely
+
+        return cachedResponse || fetchPromise;
+      });
     })
   );
 });

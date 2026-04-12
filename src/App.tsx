@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import Lenis from 'lenis';
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion } from "framer-motion";
 import { useDrag } from "@use-gesture/react";
 import { X } from "lucide-react";
 import { doc, setDoc, onSnapshot, getDocs, updateDoc, collection, query, where, Timestamp, arrayRemove, arrayUnion, deleteDoc } from "firebase/firestore";

@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState } from "react";
 import { auth, db } from "../firebase";
 import { signInWithPopup, onAuthStateChanged, User, GoogleAuthProvider } from "firebase/auth";
 import { doc, getDoc, updateDoc, deleteDoc, setDoc, onSnapshot } from "firebase/firestore";
-import { motion } from "motion/react";
+import { motion } from "framer-motion";
 
 enum OperationType {
   CREATE = 'create',

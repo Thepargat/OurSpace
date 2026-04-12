@@ -12,7 +12,7 @@ import {
   Timestamp
 } from "firebase/firestore";
 import { db } from "../firebase";
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 // --- Types ---
 export interface RelationshipMetrics {
@@ -144,7 +144,8 @@ export const generateInsights = async (metrics: RelationshipMetrics, userName: s
   const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
   if (!apiKey) return [];
   
-  const ai = new GoogleGenAI({ apiKey });
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
   
   const prompt = `You are a warm caring relationship coach. Analyse these real metrics from a couple's shared app and generate 3-4 short warm actionable insights. 
   
@@ -169,30 +170,10 @@ export const generateInsights = async (metrics: RelationshipMetrics, userName: s
     "action": "one short actionable suggestion or null"
   }]`;
 
-  const response = await ai.models.generateContent({
-    model: "gemini-flash-latest",
-    contents: prompt,
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-          properties: {
-            type: { type: Type.STRING, description: "date_night|chores|groceries|memories|spending|positive|mood" },
-            emoji: { type: Type.STRING },
-            title: { type: Type.STRING },
-            body: { type: Type.STRING },
-            action: { type: Type.STRING, nullable: true }
-          },
-          required: ["type", "emoji", "title", "body"]
-        }
-      }
-    }
-  });
-
   try {
-    return JSON.parse(response.text || "[]");
+    const result = await model.generateContent(prompt);
+    const text = result.response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '');
+    return JSON.parse(text || "[]");
   } catch (e) {
     console.error("Failed to parse Gemini response:", e);
     return [];

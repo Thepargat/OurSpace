@@ -24,7 +24,7 @@ import { getSpecialDates, SpecialDate, checkReminders, getEarliestMemory } from 
 import { generateWeeklySummary, dismissWeeklySummary, WeeklySummary } from "../../services/weeklySummaryService";
 import confetti from "canvas-confetti";
 import BottomSheet from "../ui/BottomSheet";
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 // --- Types ---
 enum OperationType {
@@ -511,7 +511,8 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
     const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
     if (!apiKey) return;
 
-    const ai = new GoogleGenAI({ apiKey });
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
     
     // Get context
     const savingsSnap = await getDocs(collection(db, "households", userData.householdId, "savingsGoals"));
@@ -524,33 +525,13 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
     Current savings available: $${totalSavings}
     Monthly budget remaining: $${(2000 - monthlySpend).toFixed(2)} (estimated)
     Their shared interests based on bucket list: ${interests || "travel, cooking, home improvement"}
-    Return ONLY JSON array:
+    Return ONLY JSON array (no markdown):
     [{ "emoji": "string", "name": "string", "description": "max 15 words", "estimatedCost": "string", "link": null }]`;
 
     try {
-      const response = await ai.models.generateContent({
-        model: "gemini-flash-latest",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                emoji: { type: Type.STRING },
-                name: { type: Type.STRING },
-                description: { type: Type.STRING },
-                estimatedCost: { type: Type.STRING },
-                link: { type: Type.NULL }
-              },
-              required: ["emoji", "name", "description", "estimatedCost"]
-            }
-          }
-        }
-      });
-      
-      setGiftSuggestions(JSON.parse(response.text || "[]"));
+      const result = await model.generateContent(prompt);
+      const text = result.response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '');
+      setGiftSuggestions(JSON.parse(text || "[]"));
     } catch (err) {
       console.error("Gift suggestions failed:", err);
     } finally {
