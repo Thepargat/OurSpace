@@ -404,9 +404,10 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
         setMilestones((m) => ({ ...m, met: Math.max(0, differenceInDays(new Date(), meetDate)) }));
       }
 
-      // ── Days Married ── user's own doc first, then household
+      // ── Days Married ── user's own doc first ('anniversary' OR 'anniversaryDate'), then household
       const marriageDate =
-        toDate(userData?.anniversaryDate) ||
+        toDate(userData?.anniversary) ||        // Settings saves this field
+        toDate(userData?.anniversaryDate) ||    // legacy
         toDate(userData?.weddingDate) ||
         toDate(hData?.anniversaryDate);
       if (marriageDate) {
@@ -699,9 +700,9 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
           className="grid grid-cols-2 gap-3"
         >
           {[
-            { label: "Days Together", value: milestones.met,     icon: "calendar_heart" },
-            { label: "Days Married",  value: milestones.married, icon: "diamond" },
-          ].map(({ label, value, icon }) => (
+            { label: "Days Together", value: milestones.met,     icon: "favorite_border",  color: HEART_RED },
+            { label: "Days Married",  value: milestones.married, icon: "diamond",           color: GOLD },
+          ].map(({ label, value, icon, color }) => (
             <motion.div
               key={label}
               variants={rise}
@@ -710,23 +711,33 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
               className="relative bg-white rounded-2xl p-5 text-center overflow-hidden border border-black/[0.04]"
               style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.05)" }}
             >
-              {/* Background glow */}
-              <div
-                className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity"
-                style={{ background: `radial-gradient(circle at center, ${GOLD}08, transparent 70%)` }}
-              />
+              <div className="absolute inset-0" style={{ background: `radial-gradient(circle at center, ${color}06, transparent 70%)` }} />
               <span
-                className="material-symbols-outlined text-[20px] mb-2 block"
-                style={{ color: `${GOLD}80`, fontVariationSettings: "'FILL' 1" }}
+                className="material-symbols-outlined text-[22px] mb-2 block"
+                style={{ color: `${color}90`, fontVariationSettings: "'FILL' 1" }}
               >
                 {icon}
               </span>
-              <p className="text-[9px] font-bold uppercase tracking-[0.18em] mb-1" style={{ color: `${GOLD}80` }}>{label}</p>
+              <p className="text-[9px] font-bold uppercase tracking-[0.18em] mb-1" style={{ color: `${color}90` }}>{label}</p>
               {loaded
-                ? <p className="font-serif text-[34px] font-bold text-[#1A1A1A] leading-none"><CountUp end={value} /></p>
+                ? (
+                  <div>
+                    <p className="font-serif text-[32px] font-bold text-[#1A1A1A] leading-none">
+                      {value === 0 ? '—' : <CountUp end={value} />}
+                    </p>
+                    {value >= 365 && (
+                      <p className="font-serif text-[10px] italic mt-0.5" style={{ color: `${color}70` }}>
+                        {Math.floor(value / 365)}y {value % 365}d
+                      </p>
+                    )}
+                  </div>
+                )
                 : <Shimmer className="h-9 w-20 mx-auto" />
               }
-              <p className="font-serif text-[10px] text-[#6B6560] italic mt-1">days</p>
+              {value === 0 && loaded && (
+                <p className="font-outfit text-[9px] text-[#6B6560] mt-1">Set date in settings</p>
+              )}
+              {value > 0 && <p className="font-serif text-[10px] text-[#6B6560] italic mt-1">days</p>}
             </motion.div>
           ))}
         </motion.section>

@@ -15,7 +15,7 @@ import { useAuth } from '../AuthWrapper';
 import { db, storage } from '../../firebase';
 import {
   collection, query, onSnapshot, addDoc, serverTimestamp,
-  orderBy, doc, deleteDoc, Timestamp
+  orderBy, doc, deleteDoc, Timestamp, getDoc, updateDoc
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { format, startOfMonth, subMonths, addMonths } from 'date-fns';
@@ -856,11 +856,18 @@ export default function FinancesTab() {
     return () => { unsubExpenses(); unsubBank(); };
   }, [householdId]);
 
-  // Load monthly budget from localStorage
+  // Load monthly budget from Firestore (set in Settings)
   useEffect(() => {
-    const saved = localStorage.getItem(MONTH_BUDGET_KEY);
-    if (saved) setMonthlyBudget(parseInt(saved));
-  }, []);
+    if (!householdId) return;
+    const unsubBudget = onSnapshot(doc(db, 'households', householdId), (snap) => {
+      const data = snap.data();
+      const limit = data?.budgetSettings?.monthlyLimit;
+      if (limit && typeof limit === 'number' && limit > 0) {
+        setMonthlyBudget(limit);
+      }
+    });
+    return () => unsubBudget();
+  }, [householdId]);
 
   // ---- Derived data ----
   const monthKey = format(viewMonth, 'yyyy-MM');
@@ -1408,10 +1415,12 @@ export default function FinancesTab() {
                   label: '💰 Set Monthly Budget',
                   action: () => {
                     const val = prompt('Monthly budget (AUD):', monthlyBudget.toString());
-                    if (val && !isNaN(parseInt(val))) {
+                    if (val && !isNaN(parseInt(val)) && householdId) {
                       const num = parseInt(val);
                       setMonthlyBudget(num);
-                      localStorage.setItem(MONTH_BUDGET_KEY, num.toString());
+                      updateDoc(doc(db, 'households', householdId), {
+                        'budgetSettings.monthlyLimit': num
+                      }).catch(console.error);
                     }
                     setShowMenu(false);
                   }
