@@ -178,61 +178,69 @@ function MainApp() {
     if (!hasHousehold || !householdId || !user) return;
 
     const interval = setInterval(async () => {
-      const now = new Date();
-      const fifteenMinsFromNow = addMinutes(now, 15);
-      
-      const q = query(
-        collection(db, "households", householdId, "events"),
-        where("startTime", ">=", now.toISOString()),
-        where("startTime", "<=", fifteenMinsFromNow.toISOString())
-      );
+      try {
+        const now = new Date();
+        const fifteenMinsFromNow = addMinutes(now, 15);
 
-      const snapshot = await getDocs(q);
-      await Promise.all(snapshot.docs.map(async (d) => {
-        const event = d.data();
-        if (!event.reminderSent) {
-          await updateDoc(doc(db, "households", householdId, "events", d.id), {
-            reminderSent: true
-          });
+        const q = query(
+          collection(db, "households", householdId, "events"),
+          where("startTime", ">=", now.toISOString()),
+          where("startTime", "<=", fifteenMinsFromNow.toISOString())
+        );
 
-          notifyPartner(
-            householdId,
-            user.uid,
-            "Event Reminder",
-            `${event.title} is starting in 15 minutes`,
-            "calendar"
-          );
-        }
-      }));
+        const snapshot = await getDocs(q);
+        await Promise.all(snapshot.docs.map(async (d) => {
+          const event = d.data();
+          if (!event.reminderSent) {
+            await updateDoc(doc(db, "households", householdId, "events", d.id), {
+              reminderSent: true
+            });
+
+            notifyPartner(
+              householdId,
+              user.uid,
+              "Event Reminder",
+              `${event.title} is starting in 15 minutes`,
+              "calendar"
+            );
+          }
+        }));
+      } catch (err) {
+        console.error("Event reminder check failed:", err);
+      }
     }, 60000); // Check every minute
 
     // Chore Overdue Checker
     const choreInterval = setInterval(async () => {
-      const now = new Date();
-      
-      const q = query(
-        collection(db, "households", householdId, "chores"),
-        where("completed", "==", false),
-        where("dueDate", "<", Timestamp.fromDate(now))
-      );
+      try {
+        const now = new Date();
 
-      const snapshot = await getDocs(q);
-      await Promise.all(snapshot.docs.map(async (d) => {
-        const chore = d.data();
-        if (!chore.overdueNotified) {
-          await updateDoc(doc(db, "households", householdId, "chores", d.id), {
-            overdueNotified: true
-          });
+        const q = query(
+          collection(db, "households", householdId, "chores"),
+          where("completed", "==", false),
+          where("dueDate", "<", Timestamp.fromDate(now))
+        );
 
-          notifyPartner(
-            householdId,
-            user.uid,
-            "Chores",
-            `${chore.title} is overdue`,
-            "chores"
-          );
-        }
-      }));
+        const snapshot = await getDocs(q);
+        await Promise.all(snapshot.docs.map(async (d) => {
+          const chore = d.data();
+          if (!chore.overdueNotified) {
+            await updateDoc(doc(db, "households", householdId, "chores", d.id), {
+              overdueNotified: true
+            });
+
+            notifyPartner(
+              householdId,
+              user.uid,
+              "Chores",
+              `${chore.title} is overdue`,
+              "chores"
+            );
+          }
+        }));
+      } catch (err) {
+        console.error("Chore overdue check failed:", err);
+      }
     }, 3600000); // Check every hour
 
     return () => {

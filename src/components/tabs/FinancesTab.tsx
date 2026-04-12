@@ -39,7 +39,7 @@ import {
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import confetti from 'canvas-confetti';
 import { format, startOfMonth, endOfMonth } from 'date-fns';
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { callGeminiVision } from "../../lib/gemini";
 import gsap from 'gsap';
 import { useGSAP } from '@gsap/react';
 import SplitType from 'split-type';
@@ -205,6 +205,7 @@ export default function FinancesTab() {
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // UI State
   const [isActionSheetOpen, setIsActionSheetOpen] = useState(false);
@@ -234,6 +235,11 @@ export default function FinancesTab() {
       })
       .reduce((sum, e) => sum + (Number(e.total) || 0), 0);
   }, [expenses]);
+
+  // Clear toast timer on unmount
+  useEffect(() => {
+    return () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); };
+  }, []);
 
   // Digit flip animation for monthly spend
   useEffect(() => {
@@ -408,9 +414,6 @@ export default function FinancesTab() {
   };
 
   const extractWithGemini = async (base64Data: string, mimeType: string): Promise<ExtractionResult> => {
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-
     const prompt = `Extract receipt data. Return ONLY valid JSON, no markdown, no explanation:
     {
       "merchant_name": "exact store name as printed",
@@ -436,14 +439,13 @@ export default function FinancesTab() {
       "confidence": 0.95
     }`;
 
-    const result = await model.generateContent([
-      { text: prompt },
-      { inlineData: { data: base64Data, mimeType } }
-    ]);
-    
-    const text = result.response.text();
+    const text = await callGeminiVision(prompt, base64Data, mimeType, "gemini-2.0-flash");
     const cleanJson = text.replace(/```json|```/g, "").trim();
-    return JSON.parse(cleanJson) as ExtractionResult;
+    try {
+      return JSON.parse(cleanJson) as ExtractionResult;
+    } catch {
+      throw new Error("Failed to parse receipt data from Gemini response");
+    }
   };
 
   const applyCategoryCache = async (extracted: ExtractionResult) => {
@@ -531,8 +533,9 @@ export default function FinancesTab() {
   };
 
   const showToast = (message: string) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     setToast(message);
-    setTimeout(() => setToast(null), 4000);
+    toastTimerRef.current = setTimeout(() => setToast(null), 4000);
   };
 
   const saveToCategoryCache = async (itemName: string, category: string, subcategory: string, merchantCategory: string) => {

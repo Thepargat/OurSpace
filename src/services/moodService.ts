@@ -11,7 +11,7 @@ import {
   Timestamp
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import { GoogleGenAI, Type } from "@google/genai";
+import { callGeminiText } from "../lib/gemini";
 
 export const MOOD_EMOJIS = ["😔", "😐", "🙂", "😊", "🤩"];
 
@@ -41,8 +41,6 @@ export const getMoodInsights = async (
   partnerId: string,
   context: { dateNights: number; chores: number; spending: number }
 ) => {
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-
   // Fetch last 30 days of moods
   const moodsRef = collection(db, 'households', householdId, 'moods');
   const thirtyDaysAgo = new Date();
@@ -73,26 +71,8 @@ export const getMoodInsights = async (
   [{ "emoji": "string", "insight": "string (max 2 sentences)" }]`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              emoji: { type: Type.STRING },
-              insight: { type: Type.STRING }
-            },
-            required: ["emoji", "insight"]
-          }
-        }
-      }
-    });
-    
-    return JSON.parse(response.text || "[]");
+    const text = await callGeminiText(prompt, "gemini-2.5-flash-preview", true);
+    return JSON.parse(text || "[]");
   } catch (err) {
     console.error("Mood insights failed:", err);
     return [];

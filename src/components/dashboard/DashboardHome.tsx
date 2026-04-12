@@ -24,7 +24,7 @@ import { getSpecialDates, SpecialDate, checkReminders, getEarliestMemory } from 
 import { generateWeeklySummary, dismissWeeklySummary, WeeklySummary } from "../../services/weeklySummaryService";
 import confetti from "canvas-confetti";
 import BottomSheet from "../ui/BottomSheet";
-import { GoogleGenAI, Type } from "@google/genai";
+import { callGeminiText } from "../../lib/gemini";
 
 // --- Types ---
 enum OperationType {
@@ -232,6 +232,7 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
     let unsubExpenses: (() => void) | null = null;
     let unsubMemory: (() => void) | null = null;
     let unsubNote: (() => void) | null = null;
+    let unsubMoods: (() => void) | null = null;
 
     if (userData?.householdId) {
       const householdPath = `households/${userData.householdId}`;
@@ -361,14 +362,13 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
       // 8. Moods
       const today = new Date().toISOString().split('T')[0];
       const moodsRef = collection(db, "households", userData.householdId, "moods");
-      const unsubMoods = onSnapshot(
+      unsubMoods = onSnapshot(
         query(moodsRef, where("date", "==", today)),
         (snap) => {
           const todayMoods = snap.docs.map(d => d.data() as MoodEntry);
           setMyMood(todayMoods.find(m => m.userId === user.uid) || null);
-          
-          const hData = userData; // We already have householdId from userData
-          const partnerId = hData?.memberIds?.find((id: string) => id !== user.uid);
+
+          const partnerId = userData?.memberIds?.find((id: string) => id !== user.uid);
           if (partnerId) {
             setPartnerMood(todayMoods.find(m => m.userId === partnerId) || null);
           }
@@ -385,6 +385,7 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
       if (unsubExpenses) unsubExpenses();
       if (unsubMemory) unsubMemory();
       if (unsubNote) unsubNote();
+      if (unsubMoods) unsubMoods();
     };
   }, [user, userData?.householdId]);
 
@@ -465,12 +466,10 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
     setLoadingGifts(true);
     setSelectedDateForGifts(date);
     
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-    
     // Get context
     const savingsSnap = await getDocs(collection(db, "households", userData.householdId, "savingsGoals"));
     const totalSavings = savingsSnap.docs.reduce((acc, d) => acc + (d.data().currentAmount || 0), 0);
-    
+
     const bucketSnap = await getDocs(collection(db, "households", userData.householdId, "bucketList"));
     const interests = bucketSnap.docs.map(d => d.data().title).join(", ");
 
@@ -482,29 +481,8 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
     [{ "emoji": "string", "name": "string", "description": "max 15 words", "estimatedCost": "string", "link": null }]`;
 
     try {
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash-preview",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                emoji: { type: Type.STRING },
-                name: { type: Type.STRING },
-                description: { type: Type.STRING },
-                estimatedCost: { type: Type.STRING },
-                link: { type: Type.NULL }
-              },
-              required: ["emoji", "name", "description", "estimatedCost"]
-            }
-          }
-        }
-      });
-      
-      setGiftSuggestions(JSON.parse(response.text || "[]"));
+      const text = await callGeminiText(prompt, "gemini-2.5-flash-preview", true);
+      setGiftSuggestions(JSON.parse(text || "[]"));
     } catch (err) {
       console.error("Gift suggestions failed:", err);
     } finally {

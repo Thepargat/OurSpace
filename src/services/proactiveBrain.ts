@@ -15,6 +15,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { isSameMonth, differenceInDays, startOfMonth, endOfMonth } from 'date-fns';
+import { ensureDate } from '../lib/date';
 
 export type AlertType = 'bill' | 'grocery' | 'budget' | 'datenight' | 'chore' | 'anniversary' | 'birthday' | 'savings';
 
@@ -27,15 +28,6 @@ export interface ProactiveAlert {
   priority: 'high' | 'medium' | 'low';
   relatedId?: string;
 }
-
-const ensureDate = (val: any): Date | null => {
-  if (!val) return null;
-  if (val instanceof Date) return val;
-  if (typeof val.toDate === 'function') return val.toDate();
-  if (typeof val === 'object' && val.seconds !== undefined) return new Date(val.seconds * 1000);
-  const d = new Date(val);
-  return isNaN(d.getTime()) ? null : d;
-};
 
 export const startProactiveBrain = (householdId: string, userId: string, partnerId: string) => {
   console.log('🧠 Proactive Life Brain starting...');

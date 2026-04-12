@@ -12,7 +12,8 @@ import {
   Timestamp
 } from "firebase/firestore";
 import { db } from "../firebase";
-import { GoogleGenAI, Type } from "@google/genai";
+import { callGeminiText } from "../lib/gemini";
+import { ensureDate } from "../lib/date";
 
 // --- Types ---
 export interface RelationshipMetrics {
@@ -43,15 +44,6 @@ export interface CachedInsights {
 }
 
 // --- Service Logic ---
-
-const ensureDate = (val: any): Date | null => {
-  if (!val) return null;
-  if (val instanceof Date) return val;
-  if (typeof val.toDate === 'function') return val.toDate();
-  if (typeof val === 'object' && val.seconds !== undefined) return new Date(val.seconds * 1000);
-  const d = new Date(val);
-  return isNaN(d.getTime()) ? null : d;
-};
 
 export const analyzeRelationship = async (householdId: string, userId: string, partnerId: string) => {
   const now = new Date();
@@ -141,10 +133,8 @@ export const calculateMetrics = (data: any, userId: string, partnerId: string): 
 };
 
 export const generateInsights = async (metrics: RelationshipMetrics, userName: string, partnerName: string): Promise<Insight[]> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-  
-  const prompt = `You are a warm caring relationship coach. Analyse these real metrics from a couple's shared app and generate 3-4 short warm actionable insights. 
-  
+  const prompt = `You are a warm caring relationship coach. Analyse these real metrics from a couple's shared app and generate 3-4 short warm actionable insights.
+
   CRITICAL: At least one insight MUST be a "mood" pattern analysis using this exact logic:
   "Here are mood scores for a couple over the last 30 days.
   ${userName} scores: ${JSON.stringify(metrics.myMoods)}
@@ -166,32 +156,11 @@ export const generateInsights = async (metrics: RelationshipMetrics, userName: s
     "action": "one short actionable suggestion or null"
   }]`;
 
-  const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
-    contents: prompt,
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-          properties: {
-            type: { type: Type.STRING, description: "date_night|chores|groceries|memories|spending|positive|mood" },
-            emoji: { type: Type.STRING },
-            title: { type: Type.STRING },
-            body: { type: Type.STRING },
-            action: { type: Type.STRING, nullable: true }
-          },
-          required: ["type", "emoji", "title", "body"]
-        }
-      }
-    }
-  });
-
   try {
-    return JSON.parse(response.text || "[]");
+    const text = await callGeminiText(prompt, "gemini-2.5-flash-preview", true);
+    return JSON.parse(text || "[]");
   } catch (e) {
-    console.error("Failed to parse Gemini response:", e);
+    console.error("Failed to generate insights:", e);
     return [];
   }
 };
