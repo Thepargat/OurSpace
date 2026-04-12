@@ -6,12 +6,11 @@ import {
   query, 
   where, 
   getDocs, 
-  orderBy, 
-  limit,
+  orderBy,
   Timestamp
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import { callGeminiText } from "../lib/gemini";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export const MOOD_EMOJIS = ["😔", "😐", "🙂", "😊", "🤩"];
 
@@ -41,6 +40,10 @@ export const getMoodInsights = async (
   partnerId: string,
   context: { dateNights: number; chores: number; spending: number }
 ) => {
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+  if (!apiKey) return [];
+  
+
   // Fetch last 30 days of moods
   const moodsRef = collection(db, 'households', householdId, 'moods');
   const thirtyDaysAgo = new Date();
@@ -70,8 +73,12 @@ export const getMoodInsights = async (
   Find 1-2 genuine patterns. Be warm and specific. Return ONLY JSON array:
   [{ "emoji": "string", "insight": "string (max 2 sentences)" }]`;
 
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+
   try {
-    const text = await callGeminiText(prompt, "gemini-2.5-flash-preview", true);
+    const result = await model.generateContent(prompt);
+    const text = result.response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '');
     return JSON.parse(text || "[]");
   } catch (err) {
     console.error("Mood insights failed:", err);

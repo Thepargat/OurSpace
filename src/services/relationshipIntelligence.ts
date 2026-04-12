@@ -4,7 +4,6 @@ import {
   where, 
   getDocs, 
   orderBy, 
-  limit, 
   doc, 
   setDoc, 
   getDoc, 
@@ -12,8 +11,7 @@ import {
   Timestamp
 } from "firebase/firestore";
 import { db } from "../firebase";
-import { callGeminiText } from "../lib/gemini";
-import { ensureDate } from "../lib/date";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 // --- Types ---
 export interface RelationshipMetrics {
@@ -44,6 +42,15 @@ export interface CachedInsights {
 }
 
 // --- Service Logic ---
+
+const ensureDate = (val: any): Date | null => {
+  if (!val) return null;
+  if (val instanceof Date) return val;
+  if (typeof val.toDate === 'function') return val.toDate();
+  if (typeof val === 'object' && val.seconds !== undefined) return new Date(val.seconds * 1000);
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? null : d;
+};
 
 export const analyzeRelationship = async (householdId: string, userId: string, partnerId: string) => {
   const now = new Date();
@@ -133,8 +140,14 @@ export const calculateMetrics = (data: any, userId: string, partnerId: string): 
 };
 
 export const generateInsights = async (metrics: RelationshipMetrics, userName: string, partnerName: string): Promise<Insight[]> => {
-  const prompt = `You are a warm caring relationship coach. Analyse these real metrics from a couple's shared app and generate 3-4 short warm actionable insights.
-
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+  if (!apiKey) return [];
+  
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+  
+  const prompt = `You are a warm caring relationship coach. Analyse these real metrics from a couple's shared app and generate 3-4 short warm actionable insights. 
+  
   CRITICAL: At least one insight MUST be a "mood" pattern analysis using this exact logic:
   "Here are mood scores for a couple over the last 30 days.
   ${userName} scores: ${JSON.stringify(metrics.myMoods)}
@@ -144,9 +157,9 @@ export const generateInsights = async (metrics: RelationshipMetrics, userName: s
   - Chores completed: ${metrics.myChores + metrics.partnerChores}
   - Money spent: $${metrics.totalSpend.toFixed(2)}
   Find 1-2 genuine patterns. Be warm and specific."
-
+  
   Be specific to their numbers. Never generic. Never preachy. Always warm and encouraging. Return ONLY a JSON array. No markdown. No explanation.
-
+  
   Format:
   [{
     "type": "date_night|chores|groceries|memories|spending|positive|mood",
@@ -157,10 +170,11 @@ export const generateInsights = async (metrics: RelationshipMetrics, userName: s
   }]`;
 
   try {
-    const text = await callGeminiText(prompt, "gemini-2.5-flash-preview", true);
+    const result = await model.generateContent(prompt);
+    const text = result.response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '');
     return JSON.parse(text || "[]");
   } catch (e) {
-    console.error("Failed to generate insights:", e);
+    console.error("Failed to parse Gemini response:", e);
     return [];
   }
 };

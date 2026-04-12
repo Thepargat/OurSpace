@@ -4,7 +4,7 @@
  * CSV parsing is pure TS. PDF uses Gemini Vision.
  */
 
-import { callGeminiVision } from './gemini';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { detectIncomeType } from './cashflow';
 
 // ============================================================
@@ -302,13 +302,25 @@ export const parseCSV = (csv: string, filename: string): BankTransaction[] => {
 export const parsePDF = async (
   file: File
 ): Promise<BankTransaction[]> => {
+  const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
+  if (!apiKey) throw new Error('Bank parsing requires VITE_GEMINI_API_KEY');
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: 'gemini-flash-latest' });
   const arrayBuffer = await file.arrayBuffer();
   const bytes = new Uint8Array(arrayBuffer);
   let binary = '';
   bytes.forEach(b => binary += String.fromCharCode(b));
   const base64 = btoa(binary);
 
-  const prompt = `Extract ALL bank transactions from this statement. Return ONLY a JSON array, no markdown:
+  const result = await model.generateContent([
+    {
+      inlineData: {
+        mimeType: 'application/pdf',
+        data: base64,
+      },
+    },
+    `Extract ALL bank transactions from this statement. Return ONLY a JSON array, no markdown:
 [{
   "date": "YYYY-MM-DD",
   "description": "string",
@@ -320,9 +332,10 @@ Rules:
 - amount MUST be negative for expenses/debits, positive for income/credits
 - Include every transaction visible — no summary rows
 - date must be ISO format YYYY-MM-DD
-- If balance not visible use null`;
+- If balance not visible use null`,
+  ]);
 
-  const text = (await callGeminiVision(prompt, base64, 'application/pdf', 'gemini-2.0-flash')).trim();
+  const text = result.response.text().trim();
   const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
   const parsed: Array<{ date: string; description: string; amount: number; balance?: number; type: 'debit' | 'credit' }> = JSON.parse(cleaned);
 
