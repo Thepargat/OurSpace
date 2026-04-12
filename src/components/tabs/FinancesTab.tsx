@@ -303,17 +303,21 @@ export default function FinancesTab() {
   // --- Handlers ---
 
   const handleTakePhoto = () => {
+    // Click FIRST while user gesture is still active, then close sheet
     cameraInputRef.current?.click();
-    setIsActionSheetOpen(false);
+    setTimeout(() => setIsActionSheetOpen(false), 50);
   };
 
   const handleChooseFromLibrary = () => {
+    // Click FIRST while user gesture is still active, then close sheet
     galleryInputRef.current?.click();
-    setIsActionSheetOpen(false);
+    setTimeout(() => setIsActionSheetOpen(false), 50);
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    // Reset so the same file can be selected again next time
+    e.target.value = '';
     if (!file || !householdId) return;
 
     const tempId = `temp_${Date.now()}`;
@@ -702,20 +706,20 @@ export default function FinancesTab() {
       </AnimatePresence>
 
       {/* Hidden Inputs */}
-      <input 
-        type="file" 
-        accept="image/*" 
-        capture="environment" 
-        ref={cameraInputRef} 
-        onChange={handleFileChange} 
-        className="hidden" 
+      <input
+        type="file"
+        accept="image/*"
+        capture="environment"
+        ref={cameraInputRef}
+        onChange={handleFileChange}
+        style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }}
       />
-      <input 
-        type="file" 
-        accept="image/*" 
-        ref={galleryInputRef} 
-        onChange={handleFileChange} 
-        className="hidden" 
+      <input
+        type="file"
+        accept="image/*"
+        ref={galleryInputRef}
+        onChange={handleFileChange}
+        style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }}
       />
 
       {/* Hero Section — Spend Progress */}
