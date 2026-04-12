@@ -11,7 +11,7 @@ const GOLD = "#B8955A";
 const tabs = [
   { id: "home",     label: "Home",     icon: "home" },
   { id: "calendar", label: "Calendar", icon: "event" },
-  { id: "together", label: "Together", icon: "favorite" },
+  { id: "mood",     label: "Mood",     icon: "mood" },
   { id: "finances", label: "Finance",  icon: "account_balance" },
   { id: "more",     label: "More",     icon: "more_horiz" },
 ];

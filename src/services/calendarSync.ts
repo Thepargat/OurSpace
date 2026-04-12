@@ -105,28 +105,37 @@ export async function syncGoogleCalendar(userId: string, householdId: string, ac
     const googleEvents = data.items || [];
     const eventsRef = collection(db, "households", householdId, "events");
 
+    // Pre-load all existing OurSpace events for de-dup
+    const allExistingSnap = await getDocs(eventsRef);
+    const allExisting = allExistingSnap.docs.map(d => ({ id: d.id, ...d.data() } as any));
+
     for (const gEvent of googleEvents) {
-      // Expert Logic: Check if this event was created by OurSpace via extended properties
+      // Skip cancelled/declined events
+      if (gEvent.status === 'cancelled') continue;
+
+      const gTitle  = (gEvent.summary || '').trim().toLowerCase();
+      const gDate   = (gEvent.start.dateTime || gEvent.start.date || '').substring(0, 10);
       const ourSpaceId = gEvent.extendedProperties?.private?.ourspace_id;
-      
-      let existingEvent: any = null;
-      if (ourSpaceId) {
-        const docSnap = await getDoc(doc(db, "households", householdId, "events", ourSpaceId));
-        if (docSnap.exists()) existingEvent = { id: docSnap.id, ...docSnap.data() };
+
+      // 1. Match by OurSpace ID embedded in the Google event
+      let existingEvent = ourSpaceId
+        ? allExisting.find((e: any) => e.id === ourSpaceId)
+        : null;
+
+      // 2. Match by googleEventIds map for this user
+      if (!existingEvent) {
+        existingEvent = allExisting.find(
+          (e: any) => e.googleEventIds?.[userId] === gEvent.id || e.googleEventId === gEvent.id
+        );
       }
 
-      // If not found by ID, try finding by googleEventId mapping for this user
+      // 3. De-dup by title + date fingerprint (catches Google-native events already in Firestore)
       if (!existingEvent) {
-        const q = query(eventsRef, where(`googleEventIds.${userId}`, "==", gEvent.id));
-        const snap = await getDocs(q);
-        if (!snap.empty) existingEvent = { id: snap.docs[0].id, ...snap.docs[0].data() };
-      }
-
-      // If still not found, search legacy googleEventId field
-      if (!existingEvent) {
-        const q = query(eventsRef, where("googleEventId", "==", gEvent.id));
-        const snap = await getDocs(q);
-        if (!snap.empty) existingEvent = { id: snap.docs[0].id, ...snap.docs[0].data() };
+        existingEvent = allExisting.find((e: any) => {
+          const eTitle = (e.title || '').trim().toLowerCase();
+          const eDate  = (e.startTime || '').substring(0, 10);
+          return eTitle === gTitle && eDate === gDate;
+        });
       }
 
       const eventData: Partial<CalendarEvent> = {
@@ -149,20 +158,27 @@ export async function syncGoogleCalendar(userId: string, householdId: string, ac
           householdId,
           isShared: false
         };
-        await addDoc(eventsRef, newEvent);
+        const newDocRef = await addDoc(eventsRef, newEvent);
+        // Add to local cache so subsequent loop iterations see it
+        allExisting.push({ id: newDocRef.id, ...newEvent });
       } else {
-        // Update existing event if Google version is newer
-        // (For simplicity we just update if it changed)
-        if (existingEvent.title !== eventData.title || existingEvent.startTime !== eventData.startTime) {
+        // Update if title or time changed, always stamp googleEventIds
+        const needsUpdate =
+          existingEvent.title !== eventData.title ||
+          existingEvent.startTime !== eventData.startTime ||
+          !existingEvent.googleEventIds?.[userId];
+
+        if (needsUpdate) {
           await updateDoc(doc(db, "households", householdId, "events", existingEvent.id), {
             ...eventData,
-            [`googleEventIds.${userId}`]: gEvent.id
+            [`googleEventIds.${userId}`]: gEvent.id,
           });
         }
       }
     }
 
     await detectConflicts(householdId);
+
   } catch (error) {
     console.error("Sync error:", error);
   }

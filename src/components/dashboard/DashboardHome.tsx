@@ -1,12 +1,10 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import {
   motion,
   AnimatePresence,
   useScroll,
   useTransform,
   animate,
-  useMotionValue,
-  useSpring,
   useReducedMotion,
 } from "motion/react";
 import {
@@ -17,16 +15,18 @@ import {
   where,
   orderBy,
   limit,
-  Timestamp,
 } from "firebase/firestore";
 import { db } from "../../firebase";
 import { useAuth } from "../AuthWrapper";
 import { differenceInDays, differenceInMinutes, format } from "date-fns";
 import { startProactiveBrain } from "../../services/proactiveBrain";
+import { getOrUpdateInsights, Insight } from "../../services/relationshipIntelligence";
 import { cn } from "../../lib/utils";
 
 const GOLD = "#B8955A";
 const GOLD_RGB = "184, 149, 90";
+const HEART_RED = "#FF0000";
+const HEART_RED_GLOW = "rgba(255, 0, 0, 0.45)";
 
 // ─── Greeting helper ────────────────────────────────────────────────────────────
 function getGreeting(name: string) {
@@ -126,7 +126,7 @@ function useHeartbeatState(
   }, [bothOnline]);
 
   const { opacity, speed, color } = useMemo(() => {
-    if (bothOnline) return { opacity: 1, speed: 1.3, color: GOLD };
+    if (bothOnline) return { opacity: 1, speed: 1.3, color: HEART_RED };
     if (!partnerIsOnline && partnerLastOnlineAt) {
       const mins = differenceInMinutes(new Date(), new Date(partnerLastOnlineAt));
       const fade = Math.max(0.12, 1 - mins / 60);
@@ -155,18 +155,18 @@ const cardTap   = { scale: 0.96, transition: { duration: 0.09 } };
 function ReunionBurst() {
   return (
     <>
-      {/* Expanding rings */}
+      {/* Expanding rings — vivid red */}
       {[0, 1, 2, 3].map((i) => (
         <motion.div
           key={`ring-${i}`}
           className="absolute inset-0 rounded-full border-2"
-          style={{ borderColor: `${GOLD}60` }}
+          style={{ borderColor: `${HEART_RED}80` }}
           initial={{ scale: 0.3, opacity: 0.9 }}
           animate={{ scale: 4 + i * 1.2, opacity: 0 }}
           transition={{ duration: 2, delay: i * 0.18, ease: "easeOut" }}
         />
       ))}
-      {/* Sparks in 12 directions */}
+      {/* Sparks — red, white, pink */}
       {Array.from({ length: 12 }).map((_, i) => {
         const angle = (i / 12) * Math.PI * 2;
         const dist  = 65 + Math.random() * 25;
@@ -175,7 +175,7 @@ function ReunionBurst() {
             key={`spark-${i}`}
             className="absolute w-2 h-2 rounded-full"
             style={{
-              background: i % 3 === 0 ? GOLD : i % 3 === 1 ? "#fff" : "#C47B6A",
+              background: i % 3 === 0 ? HEART_RED : i % 3 === 1 ? "#fff" : "#ff6b6b",
               top: "50%", left: "50%",
               marginTop: -4, marginLeft: -4,
             }}
@@ -199,31 +199,42 @@ function HeartbeatSection({
 }: {
   userData: any; partnerData: any; heart: ReturnType<typeof useHeartbeatState>;
 }) {
-  // Dual-beat keyframes: lub-dub pattern
+  // Realistic lub-dub cardiac pattern
   const heartAnimation = heart.bothOnline
     ? {
-        scale:  [1, 1.28, 1.05, 1.25, 1, 1, 1, 1],
+        scale: [1, 1.18, 1.04, 1.15, 1, 1, 1, 1],
         filter: [
-          `drop-shadow(0 0 6px ${heart.color})`,
-          `drop-shadow(0 0 28px ${heart.color})`,
-          `drop-shadow(0 0 12px ${heart.color})`,
-          `drop-shadow(0 0 26px ${heart.color})`,
-          `drop-shadow(0 0 6px ${heart.color})`,
-          `drop-shadow(0 0 6px ${heart.color})`,
-          `drop-shadow(0 0 6px ${heart.color})`,
-          `drop-shadow(0 0 6px ${heart.color})`,
+          `drop-shadow(0 0 5px ${HEART_RED_GLOW})`,
+          `drop-shadow(0 0 18px ${HEART_RED_GLOW}) drop-shadow(0 0 6px ${HEART_RED})`,
+          `drop-shadow(0 0 8px ${HEART_RED_GLOW})`,
+          `drop-shadow(0 0 16px ${HEART_RED_GLOW}) drop-shadow(0 0 5px ${HEART_RED})`,
+          `drop-shadow(0 0 5px ${HEART_RED_GLOW})`,
+          `drop-shadow(0 0 5px ${HEART_RED_GLOW})`,
+          `drop-shadow(0 0 5px ${HEART_RED_GLOW})`,
+          `drop-shadow(0 0 5px ${HEART_RED_GLOW})`,
         ],
       }
     : {
-        scale:  [1, 1.06, 1, 1, 1, 1],
-        filter: `drop-shadow(0 0 4px ${heart.color})`,
+        scale: [1, 1.05, 1, 1, 1, 1],
+        filter: `drop-shadow(0 0 3px ${heart.color})`,
       };
 
   const heartTransition = {
     duration: heart.speed,
     repeat: Infinity,
     ease: "easeInOut" as const,
-    times: heart.bothOnline ? [0, 0.08, 0.15, 0.22, 0.35, 0.55, 0.75, 1] : [0, 0.15, 0.35, 0.55, 0.75, 1],
+    times: heart.bothOnline ? [0, 0.08, 0.16, 0.24, 0.36, 0.55, 0.75, 1] : [0, 0.15, 0.35, 0.55, 0.75, 1],
+  };
+
+  // Ambient breathing ring — pulses gently behind the heart
+  const ringAnimation = heart.bothOnline
+    ? { scale: [1, 1.6, 1.2, 1.55, 1, 1], opacity: [0.25, 0.08, 0.18, 0.07, 0.18, 0.25] }
+    : { scale: [1, 1.15, 1], opacity: [0.08, 0.03, 0.08] };
+  const ringTransition = {
+    duration: heart.speed,
+    repeat: Infinity,
+    ease: "easeInOut" as const,
+    times: heart.bothOnline ? [0, 0.08, 0.16, 0.24, 0.36, 1] : [0, 0.4, 1],
   };
 
   const AvatarBubble = ({ data, isOnline, isSelf }: { data: any; isOnline: boolean; isSelf?: boolean }) => (
@@ -265,26 +276,43 @@ function HeartbeatSection({
   );
 
   return (
-    <div className="flex items-center justify-center gap-5 py-1">
+    <div className="flex items-center justify-center gap-6 py-2">
       <AvatarBubble data={userData} isOnline isSelf />
 
       {/* Central heart */}
-      <div className="relative flex flex-col items-center w-24">
+      <div className="relative flex flex-col items-center w-20">
         <AnimatePresence>
           {heart.justReunited && <ReunionBurst />}
         </AnimatePresence>
+
+        {/* Ambient breathing ring */}
+        <motion.div
+          className="absolute inset-0 rounded-full"
+          style={{
+            background: heart.bothOnline
+              ? `radial-gradient(circle, ${HEART_RED}30 0%, transparent 70%)`
+              : `radial-gradient(circle, ${GOLD}18 0%, transparent 70%)`,
+            width: 80, height: 80,
+            margin: 'auto',
+            top: '50%', left: '50%',
+            transform: 'translate(-50%, -50%)',
+            position: 'absolute',
+          }}
+          animate={ringAnimation}
+          transition={ringTransition}
+        />
 
         <motion.div
           animate={heartAnimation}
           transition={heartTransition}
           style={{ opacity: heart.opacity }}
-          className="cursor-default select-none"
+          className="cursor-default select-none relative z-10"
         >
           <span
             className="material-symbols-outlined"
             style={{
-              fontSize: 72,
-              color: heart.color,
+              fontSize: 44,
+              color: heart.bothOnline ? HEART_RED : heart.color,
               fontVariationSettings: "'FILL' 1",
               display: "block",
             }}
@@ -299,8 +327,8 @@ function HeartbeatSection({
               initial={{ opacity: 0, y: 8, scale: 0.8 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -6, scale: 0.9 }}
-              className="font-serif italic text-[11px] tracking-wider whitespace-nowrap mt-1"
-              style={{ color: GOLD }}
+              className="font-serif italic text-[10px] tracking-wider whitespace-nowrap mt-1"
+              style={{ color: HEART_RED }}
             >
               together again ♥
             </motion.p>
@@ -310,8 +338,8 @@ function HeartbeatSection({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="font-serif italic text-[10px] text-center leading-tight mt-1"
-              style={{ color: `${GOLD}70` }}
+              className="font-serif italic text-[10px] text-center leading-tight mt-0.5"
+              style={{ color: `${GOLD}60` }}
             >
               {partnerData?.displayName?.split(" ")[0]} is away
             </motion.p>
@@ -328,14 +356,17 @@ function HeartbeatSection({
 export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) => void }) {
   const { user, householdId, userData } = useAuth();
   const [partnerData, setPartnerData] = useState<any>(null);
+  const [partnerId, setPartnerId] = useState<string | null>(null);
   const [lastMemory, setLastMemory] = useState<any>(null);
   const [milestones, setMilestones] = useState({ met: 0, married: 0 });
   const [loaded, setLoaded] = useState(false);
+  const [insights, setInsights] = useState<Insight[] | null>(null);
   const [pulseData, setPulseData] = useState({
     birthday: { name: "", days: 0 },
     chores: { count: 0 },
     goal: { name: "", progress: 0 },
     event: { title: "" },
+    grocery: { count: 0 },
   });
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -348,28 +379,66 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
   useEffect(() => {
     if (!householdId || !user) return;
 
+    // Helper: safely parse any date format to a JS Date
+    const toDate = (val: any): Date | null => {
+      if (!val) return null;
+      if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
+      if (typeof val.toDate === 'function') return val.toDate();
+      if (typeof val === 'object' && val.seconds !== undefined) return new Date(val.seconds * 1000);
+      const d = new Date(val);
+      return isNaN(d.getTime()) ? null : d;
+    };
+
     const unsubHousehold = onSnapshot(doc(db, "households", householdId), (snap) => {
       const hData = snap.data();
       const pId = hData?.memberIds?.find((id: string) => id !== user.uid);
-      if (hData?.createdAt) {
-        setMilestones((m) => ({ ...m, met: differenceInDays(new Date(), hData.createdAt.toDate()) }));
+      if (pId) setPartnerId(pId);
+
+      // ── Days Together ── use meetDate > anniversary > household creation
+      const meetDate =
+        toDate(userData?.meetDate) ||
+        toDate(userData?.anniversary) ||
+        toDate(hData?.meetDate) ||
+        toDate(hData?.createdAt);
+      if (meetDate) {
+        setMilestones((m) => ({ ...m, met: Math.max(0, differenceInDays(new Date(), meetDate)) }));
       }
+
+      // ── Days Married ── user's own doc first, then household
+      const marriageDate =
+        toDate(userData?.anniversaryDate) ||
+        toDate(userData?.weddingDate) ||
+        toDate(hData?.anniversaryDate);
+      if (marriageDate) {
+        setMilestones((m) => ({ ...m, married: Math.max(0, differenceInDays(new Date(), marriageDate)) }));
+      }
+
       if (pId) {
         onSnapshot(doc(db, "users", pId), (pSnap) => {
           const pData = pSnap.data();
-          setPartnerData(pData);
+          setPartnerData({ ...pData, uid: pId });
+
+          // Birthday countdown for partner
           if (pData?.birthday) {
-            const bday = new Date(pData.birthday);
-            const today = new Date();
-            bday.setFullYear(today.getFullYear());
-            if (bday < today) bday.setFullYear(today.getFullYear() + 1);
-            setPulseData((p) => ({
-              ...p,
-              birthday: { name: pData.displayName || "Partner", days: differenceInDays(bday, today) },
-            }));
+            const bday = toDate(pData.birthday);
+            if (bday) {
+              const today = new Date();
+              const next = new Date(today.getFullYear(), bday.getMonth(), bday.getDate());
+              if (next < today) next.setFullYear(today.getFullYear() + 1);
+              const days = differenceInDays(next, today);
+              setPulseData((p) => ({
+                ...p,
+                birthday: { name: pData.displayName || "Partner", days },
+              }));
+            }
           }
-          if (pData?.anniversaryDate) {
-            setMilestones((m) => ({ ...m, married: differenceInDays(new Date(), new Date(pData.anniversaryDate)) }));
+
+          // Marriage date from partner as fallback
+          if (!userData?.anniversaryDate && !userData?.weddingDate && pData?.anniversaryDate) {
+            const mDate = toDate(pData.anniversaryDate);
+            if (mDate) {
+              setMilestones((m) => ({ ...m, married: Math.max(0, differenceInDays(new Date(), mDate)) }));
+            }
           }
         });
       }
@@ -386,43 +455,76 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
       (snap) => setPulseData((p) => ({ ...p, chores: { count: snap.size } }))
     );
 
+    const unsubGrocery = onSnapshot(
+      query(collection(db, "households", householdId, "groceries"), where("completed", "==", false)),
+      (snap) => setPulseData((p) => ({ ...p, grocery: { count: snap.size } }))
+    );
+
     const unsubGoals = onSnapshot(
       query(collection(db, "households", householdId, "savingsGoals"), orderBy("currentAmount", "desc"), limit(1)),
       (snap) => {
         const g = snap.docs[0]?.data();
-        if (g) setPulseData((p) => ({ ...p, goal: { name: g.title, progress: (g.currentAmount / g.targetAmount) * 100 } }));
+        if (g) setPulseData((p) => ({
+          ...p,
+          goal: {
+            name: g.title,
+            progress: g.targetAmount > 0 ? Math.min(100, (g.currentAmount / g.targetAmount) * 100) : 0,
+          },
+        }));
       }
     );
 
-    onSnapshot(
-      query(collection(db, "households", householdId, "events"), where("date", ">=", Timestamp.now()), orderBy("date", "asc"), limit(1)),
-      (snap) => setPulseData((p) => ({ ...p, event: { title: snap.docs[0]?.data()?.title || "Nothing planned yet" } }))
+    // Events use startTime ISO string field (not 'date')
+    const nowISO = new Date().toISOString();
+    const unsubEvent = onSnapshot(
+      query(
+        collection(db, "households", householdId, "events"),
+        where("startTime", ">=", nowISO),
+        orderBy("startTime", "asc"),
+        limit(1)
+      ),
+      (snap) => setPulseData((p) => ({ ...p, event: { title: snap.docs[0]?.data()?.title || "Nothing planned" } }))
     );
 
-    return () => { unsubHousehold(); unsubMemory(); unsubChores(); unsubGoals(); };
-  }, [householdId, user?.uid]);
+    return () => { unsubHousehold(); unsubMemory(); unsubChores(); unsubGoals(); unsubGrocery(); unsubEvent(); };
+  }, [householdId, user?.uid, userData]);
 
+  // ── Proactive Brain ───────────────────────────────────────────────────────
   useEffect(() => {
-    if (!householdId || !user || !partnerData?.uid) return;
-    const stop = startProactiveBrain(householdId, user.uid, partnerData.uid);
+    if (!householdId || !user || !partnerId) return;
+    const stop = startProactiveBrain(householdId, user.uid, partnerId);
     return () => stop();
-  }, [householdId, user?.uid, partnerData?.uid]);
+  }, [householdId, user?.uid, partnerId]);
+
+  // ── Relationship Intelligence (AI Insights) ──────────────────────────────
+  useEffect(() => {
+    if (!householdId || !user || !partnerId || !userData || !partnerData) return;
+    const userName = userData.displayName?.split(' ')[0] || 'You';
+    const partnerName = partnerData.displayName?.split(' ')[0] || 'Partner';
+    getOrUpdateInsights(householdId, user.uid, partnerId, userName, partnerName)
+      .then((result) => { if (result) setInsights(result); })
+      .catch(() => {});
+  }, [householdId, user?.uid, partnerId]);
 
   const heart = useHeartbeatState(!!partnerData?.isOnline, partnerData?.lastOnlineAt || null);
 
-  // Pulse card configs
+  // Pulse card configs — all fixed calculations
   const pulseCards = useMemo(() => [
     {
-      icon: "cake", label: "Birthday",   accent: "#E17B9B",
-      body: pulseData.birthday.name
-        ? `${pulseData.birthday.name.split(" ")[0]}'s birthday in ${pulseData.birthday.days}d`
-        : "No upcoming birthdays",
-      badge: pulseData.birthday.days > 0 ? `${pulseData.birthday.days}d` : null,
+      icon: "cake", label: "Birthday", accent: "#E17B9B",
+      body: pulseData.birthday.name && pulseData.birthday.days >= 0
+        ? pulseData.birthday.days === 0
+          ? `🎂 It's ${pulseData.birthday.name.split(' ')[0]}'s birthday today!`
+          : `${pulseData.birthday.name.split(' ')[0]}'s birthday in ${pulseData.birthday.days}d`
+        : "No birthday upcoming",
+      badge: pulseData.birthday.days > 0 && pulseData.birthday.days <= 30 ? `${pulseData.birthday.days}d` : null,
       onClick: () => onNavigate("together"),
     },
     {
       icon: "task_alt", label: "Chores", accent: "#5B68E8",
-      body: pulseData.chores.count > 0 ? `${pulseData.chores.count} task${pulseData.chores.count > 1 ? "s" : ""} pending` : "All caught up! ✓",
+      body: pulseData.chores.count > 0
+        ? `${pulseData.chores.count} task${pulseData.chores.count > 1 ? 's' : ''} to do`
+        : "All caught up ✓",
       badge: pulseData.chores.count > 0 ? `${pulseData.chores.count}` : null,
       onClick: () => onNavigate("chores"),
     },
@@ -434,9 +536,12 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
       onClick: () => onNavigate("finances"),
     },
     {
-      icon: "event", label: "Next Event", accent: "#3BAA7C",
-      body: pulseData.event.title,
-      onClick: () => onNavigate("calendar"),
+      icon: "shopping_cart", label: "Grocery", accent: "#3BAA7C",
+      body: pulseData.grocery.count > 0
+        ? `${pulseData.grocery.count} item${pulseData.grocery.count > 1 ? 's' : ''} left to buy`
+        : "Grocery list is clear",
+      badge: pulseData.grocery.count > 0 ? `${pulseData.grocery.count}` : null,
+      onClick: () => onNavigate("grocery"),
     },
   ], [pulseData, onNavigate]);
 
@@ -677,6 +782,70 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
             </motion.button>
           ))}
         </motion.section>
+
+        {/* ── AI Relationship Insights ─────────────────────────────────── */}
+        <AnimatePresence>
+          {insights && insights.length > 0 && (
+            <motion.section
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.55, type: "spring", stiffness: 240, damping: 22 }}
+            >
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] mb-3" style={{ color: `${GOLD}80` }}>
+                🧠 Relationship Pulse
+              </p>
+              <div className="space-y-2.5">
+                {insights.slice(0, 3).map((insight, i) => (
+                  <motion.div
+                    key={i}
+                    initial={{ opacity: 0, x: -12 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: 0.6 + i * 0.08, type: "spring", stiffness: 280, damping: 24 }}
+                    className="bg-white rounded-2xl p-4 border border-black/[0.04] relative overflow-hidden"
+                    style={{ boxShadow: "0 6px 24px rgba(0,0,0,0.04)" }}
+                  >
+                    {/* Subtle left accent */}
+                    <div className="absolute left-0 top-3 bottom-3 w-[3px] rounded-r-full" style={{ background: GOLD }} />
+                    <div className="pl-3">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-[18px] leading-none">{insight.emoji}</span>
+                        <span className="font-semibold text-[13px] text-[#1A1A1A] leading-snug">{insight.title}</span>
+                      </div>
+                      <p className="text-[12px] text-[#6B6560] leading-relaxed">{insight.body}</p>
+                      {insight.action && (
+                        <span
+                          className="inline-block mt-2 text-[11px] font-medium px-2.5 py-1 rounded-full"
+                          style={{ background: `${GOLD}18`, color: GOLD }}
+                        >
+                          {insight.action}
+                        </span>
+                      )}
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+            </motion.section>
+          )}
+        </AnimatePresence>
+
+        {/* ── Next Event Strip ────────────────────────────────────────── */}
+        {pulseData.event.title && pulseData.event.title !== "Nothing planned" && (
+          <motion.button
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.62, type: "spring", stiffness: 240, damping: 22 }}
+            onClick={() => onNavigate("calendar")}
+            className="w-full bg-white rounded-2xl px-4 py-3 flex items-center gap-3 border border-black/[0.04] text-left"
+            style={{ boxShadow: "0 6px 24px rgba(0,0,0,0.04)" }}
+          >
+            <span className="material-symbols-outlined text-[20px]" style={{ color: "#3BAA7C", fontVariationSettings: "'FILL' 1" }}>event</span>
+            <div className="flex-1">
+              <p className="text-[9px] font-bold uppercase tracking-[0.14em] mb-0.5" style={{ color: "#3BAA7C99" }}>Next Event</p>
+              <p className="text-[13px] font-semibold text-[#1A1A1A] leading-tight">{pulseData.event.title}</p>
+            </div>
+            <span className="material-symbols-outlined text-[16px] opacity-30">chevron_right</span>
+          </motion.button>
+        )}
 
         {/* ── Quick Actions ─────────────────────────────────────────────── */}
         <motion.section

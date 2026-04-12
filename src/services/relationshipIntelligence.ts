@@ -144,7 +144,7 @@ export const generateInsights = async (metrics: RelationshipMetrics, userName: s
   if (!apiKey) return [];
   
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
   
   const prompt = `You are a warm caring relationship coach. Analyse these real metrics from a couple's shared app and generate 3-4 short warm actionable insights. 
   

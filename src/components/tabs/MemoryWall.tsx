@@ -104,67 +104,70 @@ export default function MemoryWall() {
 
   const saveMemory = async () => {
     if (!selectedFile || !householdId || !user) return;
+    if (isSaving) return;
+
+    setIsSaving(true);
+    setUploadProgress(0);
 
     try {
-      setIsSaving(true);
       const timestamp = Date.now();
-      const filename = `${timestamp}_${selectedFile.name}`;
-      const storageRef = ref(storage, `households/${householdId}/memories/${filename}`);
-      
-      const uploadTask = uploadBytesResumable(storageRef, selectedFile);
+      const ext = selectedFile.name.split('.').pop() || 'jpg';
+      const filename = `${timestamp}.${ext}`;
+      const storagePath = `households/${householdId}/memories/${filename}`;
+      const storageRef = ref(storage, storagePath);
 
-      return new Promise((resolve, reject) => {
-        uploadTask.on('state_changed', 
-          (snapshot) => {
-            const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-            setUploadProgress(progress);
-          }, 
-          (error) => {
-            console.error("Upload error:", error);
-            setUploadProgress(null);
-            setIsSaving(false);
-            reject(error);
-          }, 
-          async () => {
-            const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-            
-            // Create final doc
-            await addDoc(collection(db, 'households', householdId, 'memories'), {
-              imageURL: downloadURL,
-              caption: caption,
-              date: serverTimestamp(),
-              uploadedBy: user.uid,
-              uploaderName: userData?.displayName || user.displayName || 'Partner',
-              uploaderPhoto: userData?.photoURL || user.photoURL || '',
-              storagePath: `households/${householdId}/memories/${filename}`
-            });
-
-            // Trigger Notification
-            notifyPartner(
-              householdId,
-              user.uid,
-              "Memory Wall",
-              `${userData?.displayName || user.displayName || 'Partner'} added a new memory ❤️`,
-              "memories"
-            );
-
-            setUploadProgress(null);
-            setIsSaving(false);
-            setIsCaptionSheetOpen(false);
-            setCaption('');
-            setSelectedFile(null);
-            setPreviewUrl(null);
-            if (fileInputRef.current) fileInputRef.current.value = '';
-            resolve(true);
-          }
+      // Upload with progress tracking
+      await new Promise<void>((resolve, reject) => {
+        const uploadTask = uploadBytesResumable(storageRef, selectedFile);
+        uploadTask.on(
+          'state_changed',
+          (snap) => {
+            setUploadProgress((snap.bytesTransferred / snap.totalBytes) * 100);
+          },
+          (err) => reject(err),
+          () => resolve()
         );
       });
-    } catch (error: any) {
-      console.error("Error saving memory:", error);
+
+      const downloadURL = await getDownloadURL(storageRef);
+
+      await addDoc(collection(db, 'households', householdId, 'memories'), {
+        imageURL: downloadURL,
+        caption: caption.trim(),
+        date: serverTimestamp(),
+        uploadedBy: user.uid,
+        uploaderName: userData?.displayName || user.displayName || 'Partner',
+        uploaderPhoto: userData?.photoURL || user.photoURL || '',
+        storagePath,
+      });
+
+      notifyPartner(
+        householdId,
+        user.uid,
+        'Memory Wall',
+        `${userData?.displayName || user.displayName || 'Partner'} added a new memory ❤️`,
+        'memories'
+      );
+
+      // Reset state
+      setUploadProgress(null);
       setIsSaving(false);
-      alert(`Failed to save memory: ${error.message || 'Unknown error'}. Please check your internet and Firebase Storage rules.`);
+      setIsCaptionSheetOpen(false);
+      setCaption('');
+      setSelectedFile(null);
+      setPreviewUrl(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } catch (error: any) {
+      console.error('Memory save error:', error);
+      setUploadProgress(null);
+      setIsSaving(false);
+      const msg = error?.code === 'storage/unauthorized'
+        ? 'Storage permission denied. Please check Firebase Storage rules (see below).'
+        : error?.message || 'Upload failed. Check your connection.';
+      alert(msg);
     }
   };
+
 
   const deleteMemory = async (memory: Memory) => {
     if (!householdId || user?.uid !== memory.uploadedBy) return;

@@ -59,7 +59,7 @@ function MainApp() {
   const [showIOSInstall, setShowIOSInstall] = useState(false);
 
   // Directional tab slide tracking
-  const TAB_ORDER = ['home', 'calendar', 'together', 'finances', 'more'];
+  const TAB_ORDER = ['home', 'calendar', 'mood', 'finances', 'more'];
   const prevTabRef = useRef('home');
   const tabDirectionRef = useRef(0); // -1 = slide right (going back), 1 = slide left (going forward)
 
@@ -429,7 +429,7 @@ function MainApp() {
 
     // Support DashboardHome navigating to specific sub-screens
     const handleDashboardNavigate = (target: string) => {
-      const subScreenTargets = ['grocery', 'meal-planner', 'chores', 'notes', 'savings', 'mood-history', 'settings', 'subscriptions', 'home-car', 'activity'];
+      const subScreenTargets = ['grocery', 'meal-planner', 'chores', 'notes', 'savings', 'mood-history', 'settings', 'subscriptions', 'home-car', 'activity', 'together'];
       if (subScreenTargets.includes(target)) {
         setSubScreen(target);
       } else {
@@ -441,7 +441,7 @@ function MainApp() {
       case "home": return <HomeTab key="home" isAnniversary={isAnniversary} onNavigate={handleDashboardNavigate} />;
       case "calendar": return <CalendarTab key="calendar" />;
       case "finances": return <FinancesTab key="finances" />;
-      case "together": return <TogetherTab key="together" />;
+      case "mood": return <MoodHistoryTab key="mood" onBack={() => setActiveTab('home')} />;
       case "more": return <MoreTab key="more" onNavigate={setSubScreen} />;
       default: return <HomeTab key="home" isAnniversary={isAnniversary} onNavigate={handleDashboardNavigate} />;
     }

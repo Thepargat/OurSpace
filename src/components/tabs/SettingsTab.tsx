@@ -271,38 +271,41 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
   const handleProfileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !user) return;
+    // Reset input so same file can be re-selected after error
+    if (fileInputRef.current) fileInputRef.current.value = '';
 
     setIsUploading(true);
-    const storageRef = ref(storage, `users/${user.uid}/profile_${Date.now()}.jpg`);
-    const uploadTask = uploadBytesResumable(storageRef, file);
+    try {
+      const ext = file.name.split('.').pop() || 'jpg';
+      const storageRef = ref(storage, `users/${user.uid}/profile_${Date.now()}.${ext}`);
 
-    uploadTask.on('state_changed',
-      (snapshot) => {
-        // Progress can be used here if needed
-      },
-      (error) => {
-        console.error("Upload error:", error);
-        setIsUploading(false);
-      },
-      async () => {
-        try {
-          const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-          
-          // Update Firestore
-          await updateDoc(doc(db, 'users', user.uid), {
-            photoURL: downloadURL
-          });
+      await new Promise<void>((resolve, reject) => {
+        const uploadTask = uploadBytesResumable(storageRef, file);
+        uploadTask.on(
+          'state_changed',
+          null,
+          (err) => reject(err),
+          () => resolve()
+        );
+      });
 
-          // Update Auth Profile (so user.photoURL reflects it too)
-          await updateProfile(user, { photoURL: downloadURL });
+      const downloadURL = await getDownloadURL(storageRef);
 
-          setIsUploading(false);
-        } catch (err) {
-          console.error("Profile update error:", err);
-          setIsUploading(false);
-        }
-      }
-    );
+      // Update Firestore first (AuthWrapper listens to this)
+      await updateDoc(doc(db, 'users', user.uid), { photoURL: downloadURL });
+
+      // Also update Firebase Auth profile
+      await updateProfile(user, { photoURL: downloadURL });
+
+      setIsUploading(false);
+    } catch (err: any) {
+      console.error('Profile photo upload error:', err);
+      setIsUploading(false);
+      const msg = err?.code === 'storage/unauthorized'
+        ? 'Permission denied. Paste this rule in Firebase Console → Storage → Rules:\n\nallow read, write: if request.auth != null;'
+        : err?.message || 'Upload failed. Check your connection and try again.';
+      alert(msg);
+    }
   };
 
   const sendEmailInvite = async () => {
@@ -371,29 +374,35 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
           className="mb-8 p-6 bg-[#EDE8DF] rounded-[20px] border border-[#D4CEC4] flex flex-col items-center text-center"
         >
           <div className="relative mb-4 group">
-            <div className="w-[72px] h-[72px] rounded-full border-[3px] border-[#fcf9f4] overflow-hidden relative z-10 transition-transform group-active:scale-95">
-              <img 
-                src={userData?.photoURL || user?.photoURL || ''} 
-                alt="Profile" 
-                className="w-full h-full object-cover"
-                referrerPolicy="no-referrer"
-              />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="w-[72px] h-[72px] rounded-full border-[3px] border-[#fcf9f4] overflow-hidden relative z-10 transition-transform group-active:scale-95 block"
+            >
+              {(userData?.photoURL || user?.photoURL) ? (
+                <img
+                  src={userData?.photoURL || user?.photoURL || ''}
+                  alt="Profile"
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="w-full h-full bg-[#B8955A] flex items-center justify-center font-serif text-2xl text-white">
+                  {(userData?.displayName || user?.displayName || 'U')[0].toUpperCase()}
+                </div>
+              )}
               {isUploading && (
-                <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
                   <Loader2 className="w-6 h-6 text-white animate-spin" />
                 </div>
               )}
-            </div>
-            
-            <button 
-              onClick={() => fileInputRef.current?.click()}
-              className="absolute bottom-0 right-0 w-7 h-7 bg-[#1A1A1A] rounded-full border-2 border-[#fcf9f4] z-20 flex items-center justify-center text-white shadow-lg active:scale-90 transition-transform"
-            >
-              <Camera size={14} />
             </button>
-            <div className="absolute inset-[-5px] border-[2px] border-[#B8955A] rounded-full" />
-            
-            <input 
+
+            <div className="absolute bottom-0 right-0 w-7 h-7 bg-[#1A1A1A] rounded-full border-2 border-[#fcf9f4] z-20 flex items-center justify-center text-white shadow-lg pointer-events-none">
+              <Camera size={12} />
+            </div>
+            <div className="absolute inset-[-5px] border-[2px] border-[#B8955A] rounded-full pointer-events-none" />
+
+            <input
               type="file"
               ref={fileInputRef}
               className="hidden"
