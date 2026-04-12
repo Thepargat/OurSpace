@@ -1,20 +1,15 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ChevronLeft } from 'lucide-react';
 import PageTransition from '../ui/PageTransition';
 import MemoryWall from './MemoryWall';
 import BucketList from './BucketList';
 
-interface TogetherTabProps {
-  onBack?: () => void;
-}
-
-export default function TogetherTab({ onBack }: TogetherTabProps) {
+export default function TogetherTab() {
   const [activeSubTab, setActiveSubTab] = useState<'memory' | 'bucket'>('memory');
 
   return (
     <PageTransition>
-      <div
+      <div 
         style={{
           height: 'calc(100dvh - 76px)',
           overflowY: 'auto',
@@ -26,14 +21,6 @@ export default function TogetherTab({ onBack }: TogetherTabProps) {
         }}
         className="flex flex-col pt-14 no-scrollbar"
       >
-        {onBack && (
-          <button
-            onClick={onBack}
-            className="absolute top-16 left-4 p-2 text-[#1A1A1A] z-10"
-          >
-            <ChevronLeft size={24} />
-          </button>
-        )}
         <div className="px-5 mb-5">
           <motion.h1
             initial={{ opacity: 0, y: 16 }}

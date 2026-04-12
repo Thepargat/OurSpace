@@ -3,8 +3,6 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import admin from "firebase-admin";
 import { fileURLToPath } from "url";
-import { GoogleGenAI } from "@google/genai";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -94,56 +92,6 @@ async function startServer() {
     } catch (error) {
       console.error("Error sending FCM message:", error);
       res.status(500).json({ error: "Failed to send notification" });
-    }
-  });
-
-  // Gemini text generation (all prompt-only AI calls)
-  app.post("/api/gemini/text", async (req, res) => {
-    const { model = "gemini-2.5-flash-preview", prompt, jsonMode = false } = req.body as {
-      model?: string; prompt: string; jsonMode?: boolean;
-    };
-    if (!prompt) return res.status(400).json({ error: "prompt required" });
-
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY not configured" });
-
-    try {
-      const ai = new GoogleGenAI({ apiKey });
-      const response = await ai.models.generateContent({
-        model,
-        contents: prompt,
-        ...(jsonMode ? { config: { responseMimeType: "application/json" } } : {}),
-      });
-      res.json({ text: response.text });
-    } catch (err) {
-      console.error("Gemini text generation failed:", err);
-      res.status(500).json({ error: "Gemini API call failed" });
-    }
-  });
-
-  // Gemini vision (receipt scanning — multimodal)
-  app.post("/api/gemini/vision", async (req, res) => {
-    const { model = "gemini-2.0-flash", prompt, base64Data, mimeType } = req.body as {
-      model?: string; prompt: string; base64Data: string; mimeType: string;
-    };
-    if (!prompt || !base64Data || !mimeType) {
-      return res.status(400).json({ error: "prompt, base64Data, and mimeType required" });
-    }
-
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY not configured" });
-
-    try {
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const genModel = genAI.getGenerativeModel({ model });
-      const result = await genModel.generateContent([
-        { text: prompt },
-        { inlineData: { data: base64Data, mimeType } },
-      ]);
-      res.json({ text: result.response.text() });
-    } catch (err) {
-      console.error("Gemini vision generation failed:", err);
-      res.status(500).json({ error: "Gemini API call failed" });
     }
   });
 
