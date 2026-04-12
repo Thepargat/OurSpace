@@ -1,5 +1,5 @@
 // Design System Overhaul - Force Reload 2
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Lenis from 'lenis';
 import { AnimatePresence, motion } from "framer-motion";
 import { useDrag } from "@use-gesture/react";
@@ -57,6 +57,20 @@ function MainApp() {
   const [showNotificationCard, setShowNotificationCard] = useState(false);
   const [inAppNotification, setInAppNotification] = useState<{ title: string, body: string, data?: any } | null>(null);
   const [showIOSInstall, setShowIOSInstall] = useState(false);
+
+  // Directional tab slide tracking
+  const TAB_ORDER = ['home', 'calendar', 'together', 'finances', 'more'];
+  const prevTabRef = useRef('home');
+  const tabDirectionRef = useRef(0); // -1 = slide right (going back), 1 = slide left (going forward)
+
+  const handleTabChange = (tab: string) => {
+    const prevIdx = TAB_ORDER.indexOf(prevTabRef.current);
+    const nextIdx = TAB_ORDER.indexOf(tab);
+    tabDirectionRef.current = nextIdx > prevIdx ? 1 : -1;
+    prevTabRef.current = tab;
+    setSubScreen(null);
+    setActiveTab(tab);
+  };
 
   // Session Tracking & Presence
   useEffect(() => {
@@ -617,23 +631,39 @@ function MainApp() {
       <OnlineParticles isAnniversary={isAnniversary} bothOnline={true} />
       <ProgressBar isLoading={isLoading} />
       <div style={{ height: '100dvh', display: 'flex', flexDirection: 'column', background: '#fcf9f4' }} className="relative w-full">
-        <AnimatePresence mode="wait">
+        <AnimatePresence mode="wait" custom={tabDirectionRef.current}>
           <motion.div
             key={subScreen || activeTab}
-            initial={isSubScreen ? { x: "100%", opacity: 0 } : { opacity: 0, scale: 0.985 }}
-            animate={isSubScreen ? { x: 0, opacity: 1 } : { opacity: 1, scale: 1 }}
-            exit={isSubScreen ? { x: "100%", opacity: 0 } : { opacity: 0, scale: 0.985 }}
-            transition={{ type: "spring", stiffness: 320, damping: 32 }}
+            custom={tabDirectionRef.current}
+            variants={{
+              initial: (dir: number) => ({
+                x: isSubScreen ? "100%" : `${dir * 40}px`,
+                opacity: 0,
+                scale: isSubScreen ? 1 : 0.98,
+              }),
+              animate: {
+                x: 0,
+                opacity: 1,
+                scale: 1,
+                transition: { type: "spring", stiffness: 340, damping: 34 },
+              },
+              exit: (dir: number) => ({
+                x: isSubScreen ? "100%" : `${-dir * 30}px`,
+                opacity: 0,
+                scale: isSubScreen ? 1 : 0.97,
+                transition: { type: "spring", stiffness: 340, damping: 34 },
+              }),
+            }}
+            initial="initial"
+            animate="animate"
+            exit="exit"
             className="flex-1 relative overflow-hidden"
           >
             {renderContent()}
           </motion.div>
         </AnimatePresence>
         {!showLaunchScreen && !isSubScreen && (
-          <BottomNav activeTab={activeTab} onChange={(tab) => {
-            setSubScreen(null);
-            setActiveTab(tab);
-          }} />
+          <BottomNav activeTab={activeTab} onChange={handleTabChange} />
         )}
       </div>
       <Toast 

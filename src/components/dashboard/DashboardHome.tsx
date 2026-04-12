@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   motion,
   AnimatePresence,
@@ -7,6 +7,7 @@ import {
   animate,
   useMotionValue,
   useSpring,
+  useReducedMotion,
 } from "motion/react";
 import {
   doc,
@@ -20,48 +21,112 @@ import {
 } from "firebase/firestore";
 import { db } from "../../firebase";
 import { useAuth } from "../AuthWrapper";
-import { differenceInDays, differenceInMinutes } from "date-fns";
+import { differenceInDays, differenceInMinutes, format } from "date-fns";
 import { startProactiveBrain } from "../../services/proactiveBrain";
 import { cn } from "../../lib/utils";
 
 const GOLD = "#B8955A";
 const GOLD_RGB = "184, 149, 90";
 
-// ─── Count-up Number Animator ───────────────────────────────────────────────
+// ─── Greeting helper ────────────────────────────────────────────────────────────
+function getGreeting(name: string) {
+  const h = new Date().getHours();
+  const first = name?.split(" ")[0] || "there";
+  if (h < 5)  return `Still up, ${first}?`;
+  if (h < 12) return `Good morning, ${first}`;
+  if (h < 17) return `Good afternoon, ${first}`;
+  if (h < 21) return `Good evening, ${first}`;
+  return `Good night, ${first} 🌙`;
+}
+
+// ─── Count-up Number Animator ────────────────────────────────────────────────
 function CountUp({ end, duration = 2 }: { end: number; duration?: number }) {
   const [count, setCount] = useState(0);
+  const prefersReduced = useReducedMotion();
   useEffect(() => {
-    if (end === 0) return;
+    if (end === 0) { setCount(0); return; }
+    if (prefersReduced) { setCount(end); return; }
     const controls = animate(0, end, {
       duration,
-      ease: [0.16, 1, 0.3, 1],
+      ease: [0.16, 1, 0.3, 1] as any,
       onUpdate: (v) => setCount(Math.floor(v)),
     });
     return () => controls.stop();
-  }, [end, duration]);
+  }, [end, duration, prefersReduced]);
   return <>{count.toLocaleString()}</>;
 }
 
-// ─── Intelligent Heartbeat Hook ───────────────────────────────────────────────
+// ─── Skeleton shimmer ────────────────────────────────────────────────────────
+function Shimmer({ className = "" }: { className?: string }) {
+  return (
+    <motion.div
+      className={`rounded-xl bg-gradient-to-r from-[#EDE8DF] via-[#f8f4ee] to-[#EDE8DF] bg-[length:200%_100%] ${className}`}
+      animate={{ backgroundPosition: ["200% 0", "-200% 0"] }}
+      transition={{ duration: 1.8, repeat: Infinity, ease: "linear" }}
+    />
+  );
+}
+
+// ─── Ambient floating orbs (decorative background) ──────────────────────────
+function AmbientOrbs({ active }: { active: boolean }) {
+  if (!active) return null;
+  return (
+    <div className="absolute inset-0 overflow-hidden pointer-events-none">
+      {[
+        { size: 180, x: "10%", y: "15%", delay: 0 },
+        { size: 120, x: "70%", y: "30%", delay: 0.8 },
+        { size: 90,  x: "50%", y: "70%", delay: 1.5 },
+      ].map((orb, i) => (
+        <motion.div
+          key={i}
+          className="absolute rounded-full"
+          style={{
+            width: orb.size,
+            height: orb.size,
+            left: orb.x,
+            top: orb.y,
+            background: `radial-gradient(circle, rgba(${GOLD_RGB}, 0.12) 0%, transparent 70%)`,
+            transform: "translate(-50%, -50%)",
+          }}
+          animate={{
+            scale: [1, 1.3, 1],
+            opacity: [0.4, 0.7, 0.4],
+          }}
+          transition={{
+            duration: 5 + i,
+            repeat: Infinity,
+            delay: orb.delay,
+            ease: "easeInOut",
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+// ─── Intelligent Heartbeat Hook ──────────────────────────────────────────────
 function useHeartbeatState(
   partnerIsOnline: boolean,
   partnerLastOnlineAt: string | null
 ) {
-  const bothOnline = partnerIsOnline; // user is always online when viewing
+  const bothOnline = partnerIsOnline;
   const [justReunited, setJustReunited] = useState(false);
+  const [celebrationDone, setCelebrationDone] = useState(false);
   const prevBothOnline = useRef(false);
 
   useEffect(() => {
-    if (bothOnline && !prevBothOnline.current) {
+    if (bothOnline && !prevBothOnline.current && !celebrationDone) {
       setJustReunited(true);
-      const t = setTimeout(() => setJustReunited(false), 4500);
+      setCelebrationDone(true);
+      const t = setTimeout(() => setJustReunited(false), 5000);
       return () => clearTimeout(t);
     }
+    if (!bothOnline) setCelebrationDone(false);
     prevBothOnline.current = bothOnline;
   }, [bothOnline]);
 
   const { opacity, speed, color } = useMemo(() => {
-    if (bothOnline) return { opacity: 1, speed: 1.4, color: GOLD };
+    if (bothOnline) return { opacity: 1, speed: 1.3, color: GOLD };
     if (!partnerIsOnline && partnerLastOnlineAt) {
       const mins = differenceInMinutes(new Date(), new Date(partnerLastOnlineAt));
       const fade = Math.max(0.12, 1 - mins / 60);
@@ -74,17 +139,190 @@ function useHeartbeatState(
   return { bothOnline, justReunited, opacity, speed, color };
 }
 
-// ─── Shared animation variants ───────────────────────────────────────────────
-const containerVariants = {
+// ─── Animation variants ──────────────────────────────────────────────────────
+const stagger = {
   hidden: {},
-  show: { transition: { staggerChildren: 0.08, delayChildren: 0.1 } },
+  show: { transition: { staggerChildren: 0.07, delayChildren: 0.15 } },
 };
-const itemVariants = {
-  hidden: { opacity: 0, y: 24, scale: 0.97 },
-  show: { opacity: 1, y: 0, scale: 1, transition: { type: 'spring' as const, stiffness: 280, damping: 24 } },
+const rise = {
+  hidden: { opacity: 0, y: 28, scale: 0.96 },
+  show:  { opacity: 1, y: 0, scale: 1, transition: { type: "spring" as const, stiffness: 260, damping: 22 } },
 };
-const cardHover = { y: -4, scale: 1.02, transition: { type: 'spring' as const, stiffness: 400, damping: 22 } };
-const cardTap   = { scale: 0.97, transition: { duration: 0.1 } };
+const cardHover = { y: -5, scale: 1.025, transition: { type: "spring" as const, stiffness: 380, damping: 20 } };
+const cardTap   = { scale: 0.96, transition: { duration: 0.09 } };
+
+// ─── Reunion Sparkles ────────────────────────────────────────────────────────
+function ReunionBurst() {
+  return (
+    <>
+      {/* Expanding rings */}
+      {[0, 1, 2, 3].map((i) => (
+        <motion.div
+          key={`ring-${i}`}
+          className="absolute inset-0 rounded-full border-2"
+          style={{ borderColor: `${GOLD}60` }}
+          initial={{ scale: 0.3, opacity: 0.9 }}
+          animate={{ scale: 4 + i * 1.2, opacity: 0 }}
+          transition={{ duration: 2, delay: i * 0.18, ease: "easeOut" }}
+        />
+      ))}
+      {/* Sparks in 12 directions */}
+      {Array.from({ length: 12 }).map((_, i) => {
+        const angle = (i / 12) * Math.PI * 2;
+        const dist  = 65 + Math.random() * 25;
+        return (
+          <motion.div
+            key={`spark-${i}`}
+            className="absolute w-2 h-2 rounded-full"
+            style={{
+              background: i % 3 === 0 ? GOLD : i % 3 === 1 ? "#fff" : "#C47B6A",
+              top: "50%", left: "50%",
+              marginTop: -4, marginLeft: -4,
+            }}
+            initial={{ x: 0, y: 0, opacity: 1, scale: 1 }}
+            animate={{
+              x: Math.cos(angle) * dist,
+              y: Math.sin(angle) * dist,
+              opacity: 0, scale: 0,
+            }}
+            transition={{ duration: 1.2, delay: 0.1 + Math.random() * 0.15, ease: "easeOut" }}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+// ─── Heartbeat Section ───────────────────────────────────────────────────────
+function HeartbeatSection({
+  userData, partnerData, heart
+}: {
+  userData: any; partnerData: any; heart: ReturnType<typeof useHeartbeatState>;
+}) {
+  // Dual-beat keyframes: lub-dub pattern
+  const heartAnimation = heart.bothOnline
+    ? {
+        scale:  [1, 1.28, 1.05, 1.25, 1, 1, 1, 1],
+        filter: [
+          `drop-shadow(0 0 6px ${heart.color})`,
+          `drop-shadow(0 0 28px ${heart.color})`,
+          `drop-shadow(0 0 12px ${heart.color})`,
+          `drop-shadow(0 0 26px ${heart.color})`,
+          `drop-shadow(0 0 6px ${heart.color})`,
+          `drop-shadow(0 0 6px ${heart.color})`,
+          `drop-shadow(0 0 6px ${heart.color})`,
+          `drop-shadow(0 0 6px ${heart.color})`,
+        ],
+      }
+    : {
+        scale:  [1, 1.06, 1, 1, 1, 1],
+        filter: `drop-shadow(0 0 4px ${heart.color})`,
+      };
+
+  const heartTransition = {
+    duration: heart.speed,
+    repeat: Infinity,
+    ease: "easeInOut" as const,
+    times: heart.bothOnline ? [0, 0.08, 0.15, 0.22, 0.35, 0.55, 0.75, 1] : [0, 0.15, 0.35, 0.55, 0.75, 1],
+  };
+
+  const AvatarBubble = ({ data, isOnline, isSelf }: { data: any; isOnline: boolean; isSelf?: boolean }) => (
+    <div className="flex flex-col items-center gap-1.5">
+      <div className="relative">
+        {/* Online glow ring */}
+        {isOnline && (
+          <motion.div
+            className="absolute -inset-[3px] rounded-full"
+            style={{ background: `conic-gradient(${GOLD}, #C47B6A, ${GOLD})` }}
+            animate={{ rotate: 360 }}
+            transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
+          />
+        )}
+        <div
+          className="relative w-16 h-16 rounded-full overflow-hidden border-2 border-[#fcf9f4] shadow-lg"
+          style={{ zIndex: 1 }}
+        >
+          {data?.photoURL
+            ? <img src={data.photoURL} alt="" className="w-full h-full object-cover" />
+            : (
+              <div className="w-full h-full flex items-center justify-center font-serif text-xl"
+                style={{ background: `${GOLD}1A`, color: GOLD }}>
+                {data?.displayName?.[0] ?? "?"}
+              </div>
+            )
+          }
+        </div>
+        {/* Status dot */}
+        <div className={cn(
+          "absolute bottom-0 right-0 w-4 h-4 border-2 border-[#fcf9f4] rounded-full z-10 shadow",
+          isOnline ? "bg-green-400" : "bg-stone-300"
+        )} />
+      </div>
+      <p className="text-[11px] font-medium text-[#1A1A1A] leading-none">
+        {data?.displayName?.split(" ")[0] || (isSelf ? "You" : "Partner")}
+      </p>
+    </div>
+  );
+
+  return (
+    <div className="flex items-center justify-center gap-5 py-1">
+      <AvatarBubble data={userData} isOnline isSelf />
+
+      {/* Central heart */}
+      <div className="relative flex flex-col items-center w-24">
+        <AnimatePresence>
+          {heart.justReunited && <ReunionBurst />}
+        </AnimatePresence>
+
+        <motion.div
+          animate={heartAnimation}
+          transition={heartTransition}
+          style={{ opacity: heart.opacity }}
+          className="cursor-default select-none"
+        >
+          <span
+            className="material-symbols-outlined"
+            style={{
+              fontSize: 72,
+              color: heart.color,
+              fontVariationSettings: "'FILL' 1",
+              display: "block",
+            }}
+          >
+            favorite
+          </span>
+        </motion.div>
+
+        <AnimatePresence>
+          {heart.justReunited && (
+            <motion.p
+              initial={{ opacity: 0, y: 8, scale: 0.8 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -6, scale: 0.9 }}
+              className="font-serif italic text-[11px] tracking-wider whitespace-nowrap mt-1"
+              style={{ color: GOLD }}
+            >
+              together again ♥
+            </motion.p>
+          )}
+          {!heart.justReunited && !heart.bothOnline && partnerData && (
+            <motion.p
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="font-serif italic text-[10px] text-center leading-tight mt-1"
+              style={{ color: `${GOLD}70` }}
+            >
+              {partnerData?.displayName?.split(" ")[0]} is away
+            </motion.p>
+          )}
+        </AnimatePresence>
+      </div>
+
+      <AvatarBubble data={partnerData} isOnline={!!partnerData?.isOnline} />
+    </div>
+  );
+}
 
 // ─── DashboardHome ────────────────────────────────────────────────────────────
 export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) => void }) {
@@ -92,6 +330,7 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
   const [partnerData, setPartnerData] = useState<any>(null);
   const [lastMemory, setLastMemory] = useState<any>(null);
   const [milestones, setMilestones] = useState({ met: 0, married: 0 });
+  const [loaded, setLoaded] = useState(false);
   const [pulseData, setPulseData] = useState({
     birthday: { name: "", days: 0 },
     chores: { count: 0 },
@@ -101,12 +340,14 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
 
   const containerRef = useRef<HTMLDivElement>(null);
   const { scrollY } = useScroll({ container: containerRef });
-  const heroY      = useTransform(scrollY, [0, 300], [0, 60]);
-  const heroOpacity = useTransform(scrollY, [0, 200], [1, 0.6]);
+  const heroScale      = useTransform(scrollY, [0, 200], [1, 1.08]);
+  const heroOpacity    = useTransform(scrollY, [0, 180], [1, 0.5]);
+  const navBg          = useTransform(scrollY, [0, 80],  ["rgba(252,249,244,0)", "rgba(252,249,244,0.95)"]);
 
-  // ── Firestore listeners ────────────────────────────────────────────────────
+  // ── Firestore ────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!householdId || !user) return;
+
     const unsubHousehold = onSnapshot(doc(db, "households", householdId), (snap) => {
       const hData = snap.data();
       const pId = hData?.memberIds?.find((id: string) => id !== user.uid);
@@ -132,6 +373,7 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
           }
         });
       }
+      setLoaded(true);
     });
 
     const unsubMemory = onSnapshot(
@@ -168,12 +410,10 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
 
   const heart = useHeartbeatState(!!partnerData?.isOnline, partnerData?.lastOnlineAt || null);
 
-  // ── Pulse cards config ────────────────────────────────────────────────────
-  const pulseCards = [
+  // Pulse card configs
+  const pulseCards = useMemo(() => [
     {
-      icon: "cake",
-      label: "Birthday",
-      accent: "#E17B9B",
+      icon: "cake", label: "Birthday",   accent: "#E17B9B",
       body: pulseData.birthday.name
         ? `${pulseData.birthday.name.split(" ")[0]}'s birthday in ${pulseData.birthday.days}d`
         : "No upcoming birthdays",
@@ -181,30 +421,31 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
       onClick: () => onNavigate("together"),
     },
     {
-      icon: "assignment",
-      label: "Tasks",
-      accent: "#5B68E8",
-      body: pulseData.chores.count > 0 ? "Shared errands pending" : "All caught up! ✓",
+      icon: "task_alt", label: "Chores", accent: "#5B68E8",
+      body: pulseData.chores.count > 0 ? `${pulseData.chores.count} task${pulseData.chores.count > 1 ? "s" : ""} pending` : "All caught up! ✓",
       badge: pulseData.chores.count > 0 ? `${pulseData.chores.count}` : null,
-      onClick: () => onNavigate("more"),
+      onClick: () => onNavigate("chores"),
     },
     {
-      icon: "savings",
-      label: "Savings",
-      accent: GOLD,
+      icon: "savings", label: "Savings", accent: GOLD,
       body: pulseData.goal.name || "Set a shared goal",
       badge: pulseData.goal.progress > 0 ? `${Math.round(pulseData.goal.progress)}%` : null,
       progress: pulseData.goal.progress,
       onClick: () => onNavigate("finances"),
     },
     {
-      icon: "event",
-      label: "Next Event",
-      accent: "#3BAA7C",
+      icon: "event", label: "Next Event", accent: "#3BAA7C",
       body: pulseData.event.title,
-      badge: null,
       onClick: () => onNavigate("calendar"),
     },
+  ], [pulseData, onNavigate]);
+
+  const quickActions = [
+    { icon: "shopping_cart", label: "Grocery",  nav: "grocery" },
+    { icon: "restaurant_menu", label: "Meals",  nav: "meal-planner" },
+    { icon: "task_alt", label: "Chores",         nav: "chores" },
+    { icon: "sticky_note_2", label: "Notes",     nav: "notes" },
+    { icon: "account_balance_wallet", label: "Finance", nav: "finances" },
   ];
 
   return (
@@ -212,264 +453,214 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
       ref={containerRef}
       className="relative h-full overflow-y-auto overflow-x-hidden bg-[#fcf9f4] no-scrollbar"
     >
-      {/* ── TopAppBar ─────────────────────────────────────────────────────── */}
+      {/* Ambient orbs — active when partner is online */}
+      <AmbientOrbs active={heart.bothOnline} />
+
+      {/* ── Sticky TopAppBar ─────────────────────────────────────────────── */}
       <motion.nav
-        initial={{ y: -20, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ delay: 0.1, type: "spring", stiffness: 200, damping: 22 }}
-        className="sticky top-0 z-[100] flex justify-between items-center w-full px-5 pt-4 pb-3 bg-[#fcf9f4]/80 backdrop-blur-xl"
+        style={{ background: navBg }}
+        className="sticky top-0 z-[100] flex justify-between items-center w-full px-5 pt-4 pb-3 backdrop-blur-xl"
       >
         <motion.div
-          whileTap={{ scale: 0.9 }}
+          initial={{ opacity: 0, x: -12 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ delay: 0.1, type: "spring", stiffness: 280, damping: 22 }}
+          whileTap={{ scale: 0.88 }}
           onClick={() => onNavigate("settings")}
           className="w-9 h-9 rounded-full overflow-hidden border-2 cursor-pointer"
           style={{ borderColor: `${GOLD}40` }}
         >
           {userData?.photoURL
             ? <img src={userData.photoURL} alt="Me" className="w-full h-full object-cover" />
-            : <div className="w-full h-full flex items-center justify-center font-serif text-sm" style={{ background: `${GOLD}20`, color: GOLD }}>
+            : (
+              <div className="w-full h-full flex items-center justify-center font-serif text-sm"
+                style={{ background: `${GOLD}20`, color: GOLD }}>
                 {userData?.displayName?.[0] ?? "U"}
               </div>
+            )
           }
         </motion.div>
 
-        {/* OurSpace wordmark */}
-        <h1 className="font-serif text-[26px] font-light text-[#1A1A1A] flex items-baseline gap-1 tracking-tight">
+        <motion.h1
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.15, type: "spring", stiffness: 280, damping: 22 }}
+          className="font-serif text-[26px] font-light text-[#1A1A1A] flex items-baseline gap-1 tracking-tight"
+        >
           OurSpace
-          <span className="inline-block h-2 w-2 rounded-full" style={{ background: GOLD }} />
-        </h1>
+          <motion.span
+            className="inline-block h-2 w-2 rounded-full"
+            style={{ background: GOLD }}
+            animate={{ scale: [1, 1.4, 1] }}
+            transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+          />
+        </motion.h1>
 
         <motion.div
+          initial={{ opacity: 0, x: 12 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ delay: 0.1, type: "spring", stiffness: 280, damping: 22 }}
           whileTap={{ scale: 0.88, rotate: 30 }}
           onClick={() => onNavigate("settings")}
           className="w-9 h-9 flex items-center justify-center cursor-pointer rounded-full hover:bg-[#B8955A]/10 transition-colors"
         >
-          <span className="material-symbols-outlined text-[22px]" style={{ color: "rgba(28,28,25,0.5)" }}>settings</span>
+          <span className="material-symbols-outlined text-[22px]" style={{ color: "rgba(28,28,25,0.45)" }}>settings</span>
         </motion.div>
       </motion.nav>
 
       <main className="px-5 pb-32 space-y-6 pt-2">
+        {/* ── Greeting ───────────────────────────────────────────────────── */}
+        <motion.p
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.18, duration: 0.5 }}
+          className="font-serif italic text-[15px]"
+          style={{ color: `${GOLD}90` }}
+        >
+          {getGreeting(userData?.displayName || "")}
+        </motion.p>
+
         {/* ── Hero Memory ────────────────────────────────────────────────── */}
         <motion.section
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2, type: "spring", stiffness: 260, damping: 22 }}
+          transition={{ delay: 0.22, type: "spring", stiffness: 260, damping: 22 }}
+          className="relative"
         >
-          <motion.div
-            style={{ y: heroY, opacity: heroOpacity }}
-            className="w-full h-52 rounded-3xl overflow-hidden shadow-[0_16px_48px_rgba(0,0,0,0.10)] relative"
-          >
-            <img
-              src={lastMemory?.imageURL || "https://images.unsplash.com/photo-1518199266791-5375a83190b7?auto=format&fit=crop&q=80&w=2070"}
-              alt="Our latest memory"
-              className="w-full h-full object-cover"
-            />
-            {lastMemory?.caption && (
-              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/50 to-transparent px-5 pb-4 pt-8">
-                <p className="text-white font-serif text-sm italic opacity-90">{lastMemory.caption}</p>
-              </div>
-            )}
-            {/* Tap to Stories */}
-            <motion.button
-              whileTap={{ scale: 0.95 }}
-              onClick={() => onNavigate("together")}
-              className="absolute top-3 right-3 bg-white/90 backdrop-blur-md rounded-full px-3 py-1.5 flex items-center gap-1.5 shadow-md"
-            >
-              <span className="material-symbols-outlined text-[14px]" style={{ color: GOLD, fontVariationSettings: "'FILL' 1" }}>photo_library</span>
-              <span className="text-[11px] font-medium text-[#1A1A1A]">Memories</span>
-            </motion.button>
-          </motion.div>
+          {!loaded ? (
+            <Shimmer className="w-full h-52 rounded-3xl" />
+          ) : (
+            <div className="w-full h-52 rounded-3xl overflow-hidden shadow-[0_16px_48px_rgba(0,0,0,0.10)] relative">
+              <motion.img
+                style={{ scale: heroScale, opacity: heroOpacity }}
+                src={lastMemory?.imageURL || "https://images.unsplash.com/photo-1518199266791-5375a83190b7?auto=format&fit=crop&q=80&w=2070"}
+                alt="Our latest memory"
+                className="w-full h-full object-cover origin-center"
+              />
+              {/* Gradient overlay */}
+              <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent" />
+              {lastMemory?.caption && (
+                <p className="absolute bottom-4 left-5 right-16 text-white font-serif text-sm italic opacity-90 leading-snug line-clamp-2">
+                  {lastMemory.caption}
+                </p>
+              )}
+              {/* Memories pill */}
+              <motion.button
+                whileTap={{ scale: 0.92 }}
+                onClick={() => onNavigate("together")}
+                className="absolute top-3 right-3 bg-white/90 backdrop-blur-md rounded-full px-3 py-1.5 flex items-center gap-1.5 shadow-md"
+              >
+                <span className="material-symbols-outlined text-[14px]" style={{ color: GOLD, fontVariationSettings: "'FILL' 1" }}>photo_library</span>
+                <span className="text-[11px] font-medium text-[#1A1A1A]">Memories</span>
+              </motion.button>
+            </div>
+          )}
         </motion.section>
 
         {/* ── Presence & Heartbeat ──────────────────────────────────────── */}
         <motion.section
-          initial={{ opacity: 0, scale: 0.95 }}
+          initial={{ opacity: 0, scale: 0.94 }}
           animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: 0.3, type: "spring", stiffness: 260, damping: 22 }}
-          className="flex items-center justify-center gap-6 py-2"
+          transition={{ delay: 0.32, type: "spring", stiffness: 260, damping: 22 }}
+          className="relative bg-white/60 backdrop-blur-sm rounded-3xl px-4 py-5 border border-black/[0.04] shadow-sm"
         >
-          {/* User avatar */}
-          <div className="flex flex-col items-center gap-1.5">
-            <div className="relative">
-              <div className="w-16 h-16 rounded-full overflow-hidden border-2 shadow-lg" style={{ borderColor: `${GOLD}60` }}>
-                {userData?.photoURL
-                  ? <img src={userData.photoURL} alt="Me" className="w-full h-full object-cover" />
-                  : <div className="w-full h-full flex items-center justify-center font-serif text-lg" style={{ background: `${GOLD}15`, color: GOLD }}>{userData?.displayName?.[0]}</div>
-                }
-              </div>
-              <motion.div
-                animate={{ scale: [1, 1.5, 1], opacity: [0.8, 0, 0.8] }}
-                transition={{ duration: 2, repeat: Infinity, ease: "easeOut" }}
-                className="absolute -inset-1 rounded-full border"
-                style={{ borderColor: `${GOLD}40` }}
-              />
-              <div className="absolute bottom-0 right-0 w-4 h-4 bg-green-400 border-2 border-white rounded-full shadow-sm" />
-            </div>
-            <p className="text-[11px] font-medium text-[#1A1A1A]">{userData?.displayName?.split(" ")[0] || "You"}</p>
-          </div>
+          <HeartbeatSection userData={userData} partnerData={partnerData} heart={heart} />
 
-          {/* Central Heart */}
-          <div className="relative flex flex-col items-center">
-            <AnimatePresence>
-              {heart.justReunited && (
-                <>
-                  {[0, 1, 2].map((i) => (
-                    <motion.div
-                      key={i}
-                      initial={{ scale: 0.3, opacity: 0.9 }}
-                      animate={{ scale: 3.5 + i * 0.8, opacity: 0 }}
-                      exit={{ opacity: 0 }}
-                      transition={{ duration: 1.8, delay: i * 0.25, ease: "easeOut" }}
-                      className="absolute inset-0 rounded-full border-2"
-                      style={{ borderColor: GOLD, zIndex: -1 }}
-                    />
-                  ))}
-                  {Array.from({ length: 8 }).map((_, i) => {
-                    const angle = (i / 8) * Math.PI * 2;
-                    return (
-                      <motion.div
-                        key={`spark-${i}`}
-                        initial={{ x: 0, y: 0, opacity: 1, scale: 1 }}
-                        animate={{ x: Math.cos(angle) * 70, y: Math.sin(angle) * 70, opacity: 0, scale: 0 }}
-                        transition={{ duration: 1.3, delay: 0.15, ease: "easeOut" }}
-                        className="absolute w-2 h-2 rounded-full"
-                        style={{ background: GOLD, top: "50%", left: "50%", marginTop: -4, marginLeft: -4, zIndex: -1 }}
-                      />
-                    );
-                  })}
-                </>
-              )}
-            </AnimatePresence>
-
-            <motion.button
-              whileTap={{ scale: 0.85 }}
-              animate={
-                heart.bothOnline
-                  ? { scale: [1, 1.22, 1, 1.22, 1], filter: [`drop-shadow(0 0 6px ${heart.color})`, `drop-shadow(0 0 22px ${heart.color})`, `drop-shadow(0 0 6px ${heart.color})`, `drop-shadow(0 0 22px ${heart.color})`, `drop-shadow(0 0 6px ${heart.color})`] }
-                  : { scale: [1, 1.04, 1], filter: `drop-shadow(0 0 4px ${heart.color})` }
-              }
-              transition={{
-                duration: heart.speed,
-                repeat: Infinity,
-                ease: "easeInOut",
-                times: heart.bothOnline ? [0, 0.12, 0.25, 0.38, 1] : [0, 0.5, 1],
-              }}
-              style={{ opacity: heart.opacity }}
-            >
-              <span
-                className="material-symbols-outlined text-[60px]"
-                style={{ color: heart.color, fontVariationSettings: "'FILL' 1" }}
-              >
-                favorite
-              </span>
-            </motion.button>
-
-            <AnimatePresence>
-              {heart.justReunited && (
-                <motion.p
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -6 }}
-                  className="font-serif italic text-[11px] mt-1 tracking-wider whitespace-nowrap"
-                  style={{ color: GOLD }}
-                >
-                  together again ♥
-                </motion.p>
-              )}
-            </AnimatePresence>
-          </div>
-
-          {/* Partner avatar */}
-          <div className="flex flex-col items-center gap-1.5">
-            <div className="relative">
-              <div className="w-16 h-16 rounded-full overflow-hidden border-2 shadow-lg" style={{ borderColor: partnerData?.isOnline ? `${GOLD}60` : "rgba(0,0,0,0.1)" }}>
-                {partnerData?.photoURL
-                  ? <img src={partnerData.photoURL} alt="Partner" className="w-full h-full object-cover" />
-                  : <div className="w-full h-full flex items-center justify-center font-serif text-lg bg-stone-200 text-stone-400">{partnerData?.displayName?.[0] ?? "?"}</div>
-                }
-              </div>
-              {partnerData?.isOnline && (
-                <motion.div
-                  animate={{ scale: [1, 1.5, 1], opacity: [0.8, 0, 0.8] }}
-                  transition={{ duration: 2, repeat: Infinity, ease: "easeOut" }}
-                  className="absolute -inset-1 rounded-full border"
-                  style={{ borderColor: `${GOLD}40` }}
-                />
-              )}
-              <div className={cn(
-                "absolute bottom-0 right-0 w-4 h-4 border-2 border-white rounded-full shadow-sm transition-colors",
-                partnerData?.isOnline ? "bg-green-400" : "bg-stone-300"
-              )} />
-            </div>
-            <p className="text-[11px] font-medium text-[#1A1A1A]">{partnerData?.displayName?.split(" ")[0] || "Partner"}</p>
-          </div>
+          {/* Status line */}
+          <motion.p
+            className="text-center font-serif italic text-[11px] mt-3"
+            style={{ color: `${GOLD}70` }}
+            animate={{ opacity: heart.bothOnline ? [0.6, 1, 0.6] : 0.5 }}
+            transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+          >
+            {heart.bothOnline
+              ? "You're both here ♥"
+              : partnerData?.isOnline === false
+                ? `${partnerData?.displayName?.split(" ")[0] || "Partner"} was last seen ${
+                    partnerData?.lastOnlineAt
+                      ? differenceInMinutes(new Date(), new Date(partnerData.lastOnlineAt)) < 60
+                        ? `${differenceInMinutes(new Date(), new Date(partnerData.lastOnlineAt))}m ago`
+                        : "a while ago"
+                      : "recently"
+                  }`
+                : "Missing them..."
+            }
+          </motion.p>
         </motion.section>
 
         {/* ── Milestones ────────────────────────────────────────────────── */}
         <motion.section
-          variants={containerVariants}
-          initial="hidden"
-          animate="show"
+          variants={stagger} initial="hidden" animate="show"
           className="grid grid-cols-2 gap-3"
         >
           {[
-            { label: "Days Together", value: milestones.met },
-            { label: "Days Married", value: milestones.married },
-          ].map(({ label, value }) => (
+            { label: "Days Together", value: milestones.met,     icon: "calendar_heart" },
+            { label: "Days Married",  value: milestones.married, icon: "diamond" },
+          ].map(({ label, value, icon }) => (
             <motion.div
               key={label}
-              variants={itemVariants}
+              variants={rise}
               whileHover={cardHover}
               whileTap={cardTap}
-              className="bg-white rounded-2xl p-5 text-center shadow-sm border border-black/5 cursor-default"
-              style={{ boxShadow: "0 12px 36px rgba(0,0,0,0.05)" }}
+              className="relative bg-white rounded-2xl p-5 text-center overflow-hidden border border-black/[0.04]"
+              style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.05)" }}
             >
-              <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-[#B8955A]/70 mb-2">{label}</p>
-              <p className="font-serif text-3xl font-bold text-[#1A1A1A]">
-                <CountUp end={value} />
-              </p>
+              {/* Background glow */}
+              <div
+                className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                style={{ background: `radial-gradient(circle at center, ${GOLD}08, transparent 70%)` }}
+              />
+              <span
+                className="material-symbols-outlined text-[20px] mb-2 block"
+                style={{ color: `${GOLD}80`, fontVariationSettings: "'FILL' 1" }}
+              >
+                {icon}
+              </span>
+              <p className="text-[9px] font-bold uppercase tracking-[0.18em] mb-1" style={{ color: `${GOLD}80` }}>{label}</p>
+              {loaded
+                ? <p className="font-serif text-[34px] font-bold text-[#1A1A1A] leading-none"><CountUp end={value} /></p>
+                : <Shimmer className="h-9 w-20 mx-auto" />
+              }
               <p className="font-serif text-[10px] text-[#6B6560] italic mt-1">days</p>
             </motion.div>
           ))}
         </motion.section>
 
-        {/* ── Daily Pulse Grid (2 × 2) ──────────────────────────────────── */}
-        <motion.section
-          variants={containerVariants}
-          initial="hidden"
-          animate="show"
-          className="grid grid-cols-2 gap-3"
-        >
-          {pulseCards.map(({ icon, label, accent, body, badge, progress, onClick }) => (
+        {/* ── Daily Pulse Grid ─────────────────────────────────────────── */}
+        <motion.section variants={stagger} initial="hidden" animate="show" className="grid grid-cols-2 gap-3">
+          {pulseCards.map(({ icon, label, accent, body, badge, progress, onClick }, i) => (
             <motion.button
               key={label}
-              variants={itemVariants}
+              variants={rise}
               whileHover={cardHover}
               whileTap={cardTap}
               onClick={onClick}
-              className="bg-white rounded-2xl p-4 text-left flex flex-col justify-between h-36 shadow-sm border border-black/5 relative overflow-hidden"
-              style={{ boxShadow: "0 12px 36px rgba(0,0,0,0.05)" }}
+              className="bg-white rounded-2xl p-4 text-left flex flex-col justify-between h-36 relative overflow-hidden border border-black/[0.04]"
+              style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.05)" }}
             >
-              {/* Coloured left accent */}
-              <div className="absolute left-0 top-4 bottom-4 w-1 rounded-r-full" style={{ background: accent }} />
+              {/* Left accent border */}
+              <div className="absolute left-0 top-4 bottom-4 w-[3px] rounded-r-full" style={{ background: accent }} />
               <div className="flex justify-between items-start pl-3">
                 <span
-                  className="material-symbols-outlined text-2xl"
+                  className="material-symbols-outlined text-[22px]"
                   style={{ color: accent, fontVariationSettings: "'FILL' 1" }}
                 >
                   {icon}
                 </span>
                 {badge != null && (
-                  <span
+                  <motion.span
+                    initial={{ scale: 0 }}
+                    animate={{ scale: 1 }}
+                    transition={{ type: "spring", stiffness: 400, delay: 0.3 + i * 0.07 }}
                     className="text-[10px] font-bold px-2 py-0.5 rounded-full"
                     style={{ background: `${accent}20`, color: accent }}
                   >
                     {badge}
-                  </span>
+                  </motion.span>
                 )}
               </div>
               <div className="pl-3">
-                <p className="text-[9px] font-bold uppercase tracking-[0.15em] text-[#6B6560]/60 mb-1">{label}</p>
+                <p className="text-[9px] font-bold uppercase tracking-[0.14em] mb-1" style={{ color: `${accent}80` }}>{label}</p>
                 <p className="text-[13px] font-semibold text-[#1A1A1A] leading-tight line-clamp-2">{body}</p>
                 {progress != null && progress > 0 && (
                   <div className="mt-2 h-1 bg-[#EDE8DF] rounded-full overflow-hidden">
@@ -487,36 +678,47 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
           ))}
         </motion.section>
 
-        {/* ── Quick Actions strip ───────────────────────────────────────── */}
+        {/* ── Quick Actions ─────────────────────────────────────────────── */}
         <motion.section
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.6, type: "spring", stiffness: 240, damping: 22 }}
-          className="flex gap-3 overflow-x-auto pb-1 no-scrollbar"
+          transition={{ delay: 0.65, type: "spring", stiffness: 240, damping: 22 }}
         >
-          {[
-            { icon: "shopping_cart", label: "Grocery", nav: "more", sub: "grocery" },
-            { icon: "restaurant_menu", label: "Meals",   nav: "more", sub: "meal-planner" },
-            { icon: "task_alt",       label: "Chores",   nav: "more", sub: "chores" },
-            { icon: "sticky_note_2",  label: "Notes",    nav: "more", sub: "notes" },
-          ].map(({ icon, label }) => (
-            <motion.button
-              key={label}
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.93 }}
-              className="flex flex-col items-center gap-1.5 flex-shrink-0 px-4 py-3 bg-white rounded-2xl border border-black/5 shadow-sm min-w-[72px]"
-              onClick={() => onNavigate("more")}
-            >
-              <span
-                className="material-symbols-outlined text-[22px]"
-                style={{ color: GOLD, fontVariationSettings: "'FILL' 0" }}
+          <p className="text-[10px] font-bold uppercase tracking-[0.18em] mb-3" style={{ color: `${GOLD}80` }}>Quick Access</p>
+          <div className="flex gap-2.5 overflow-x-auto pb-1 no-scrollbar">
+            {quickActions.map(({ icon, label, nav }, i) => (
+              <motion.button
+                key={label}
+                initial={{ opacity: 0, y: 12, scale: 0.9 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{ delay: 0.7 + i * 0.06, type: "spring", stiffness: 300 }}
+                whileHover={{ y: -3, scale: 1.05 }}
+                whileTap={{ scale: 0.93 }}
+                onClick={() => onNavigate(nav)}
+                className="flex flex-col items-center gap-1.5 flex-shrink-0 px-4 py-3 bg-white rounded-2xl border border-black/[0.04] shadow-sm min-w-[68px]"
               >
-                {icon}
-              </span>
-              <span className="text-[11px] font-medium text-[#6B6560] whitespace-nowrap">{label}</span>
-            </motion.button>
-          ))}
+                <span
+                  className="material-symbols-outlined text-[20px]"
+                  style={{ color: GOLD, fontVariationSettings: "'FILL' 0" }}
+                >
+                  {icon}
+                </span>
+                <span className="text-[10px] font-medium text-[#6B6560] whitespace-nowrap leading-none">{label}</span>
+              </motion.button>
+            ))}
+          </div>
         </motion.section>
+
+        {/* ── Today's date footer ───────────────────────────────────────── */}
+        <motion.p
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 1 }}
+          className="text-center font-serif italic text-[11px] pt-2"
+          style={{ color: `${GOLD}50` }}
+        >
+          {format(new Date(), "EEEE, MMMM d")}
+        </motion.p>
       </main>
     </div>
   );

@@ -60,7 +60,7 @@ export default function SwipeableItem({
     }
   });
 
-  // @ts-expect-error type binding workaround
+  // bind helper — cast to avoid gesture library typings conflict
   const bindProps = (bind as any)() as Record<string, unknown>;
 
   return (

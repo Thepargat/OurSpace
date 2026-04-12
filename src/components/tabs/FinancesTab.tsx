@@ -35,6 +35,7 @@ interface LineItem {
   name: string;
   price: number;
   quantity?: number;
+  unitPrice?: number;
   category: string;
   assignedTo: 'user' | 'partner' | 'shared';
 }
@@ -229,13 +230,15 @@ function WeeklyBarChart({ weeklyTotals }: { weeklyTotals: number[] }) {
 }
 
 // ============================================================
-// RECEIPT SCAN (camera → Gemini)
+// RECEIPT SCAN (camera → Gemini 2.5 Flash)
 // ============================================================
 async function scanReceipt(file: File, householdId: string): Promise<{
   merchantName: string;
   total: number;
   lineItems: LineItem[];
   date?: string;
+  subtotal?: number;
+  tax?: number;
 }> {
   const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
   if (!apiKey) throw new Error('Finance scanning requires VITE_GEMINI_API_KEY');
@@ -252,39 +255,68 @@ async function scanReceipt(file: File, householdId: string): Promise<{
 
   const result = await model.generateContent([
     { inlineData: { mimeType: file.type as any, data: base64 } },
-    `Extract from this receipt. Return ONLY valid JSON (no markdown):
+    `You are an expert receipt parser. Extract ALL details from this receipt. Return ONLY valid JSON (no markdown, no comments):
 {
-  "merchantName": "store name",
-  "total": 0.00,
+  "merchantName": "exact store name from receipt",
   "date": "YYYY-MM-DD or null",
+  "subtotal": 0.00,
+  "tax": 0.00,
+  "total": 0.00,
   "lineItems": [
-    { "name": "item name", "price": 0.00, "quantity": 1 }
+    {
+      "name": "exact item name",
+      "quantity": 1,
+      "unitPrice": 0.00,
+      "price": 0.00
+    }
   ]
 }
-Rules: include ALL line items. total should match sum. If no total visible, sum the items.`
+
+Rules:
+- Include EVERY line item on the receipt
+- quantity: number of units purchased (default 1 if not shown)
+- unitPrice: price for ONE unit (price / quantity)
+- price: total line item price (quantity × unitPrice)
+- subtotal: sum before tax
+- tax: tax amount (0 if not shown)
+- total: grand total including tax. If not visible, sum all items + tax
+- Do NOT include subtotal/tax/total as line items`
   ]);
 
-  const text = result.response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '');
+  const text = result.response.text().trim()
+    .replace(/```json\n?/g, '')
+    .replace(/```\n?/g, '')
+    .trim();
+
   const parsed = JSON.parse(text);
 
   // Categorize each line item
   const items: LineItem[] = await Promise.all(
     (parsed.lineItems || []).map(async (item: any, i: number) => {
       const catResult = await categorizeItem(item.name, parsed.merchantName, householdId);
+      const qty = parseFloat(item.quantity) || 1;
+      const unitPrice = parseFloat(item.unitPrice) || parseFloat(item.price) / qty || 0;
+      const totalPrice = parseFloat(item.price) || unitPrice * qty;
       return {
         id: `item-${i}`,
         name: item.name || 'Item',
-        price: parseFloat(item.price) || 0,
-        quantity: item.quantity || 1,
+        price: Math.round(totalPrice * 100) / 100,
+        quantity: qty,
+        unitPrice: Math.round(unitPrice * 100) / 100,
         category: catResult.cat,
         assignedTo: 'shared' as const,
       };
     })
   );
 
+  const computedTotal = items.reduce((s, i) => s + i.price, 0);
+  const finalTotal = parseFloat(parsed.total) || computedTotal;
+
   return {
     merchantName: parsed.merchantName || 'Unknown',
-    total: parseFloat(parsed.total) || items.reduce((s, i) => s + i.price, 0),
+    total: Math.round(finalTotal * 100) / 100,
+    subtotal: parseFloat(parsed.subtotal) || computedTotal,
+    tax: parseFloat(parsed.tax) || 0,
     lineItems: items,
     date: parsed.date || null,
   };
@@ -294,43 +326,26 @@ Rules: include ALL line items. total should match sum. If no total visible, sum 
 // RECEIPT CARD
 // ============================================================
 function ReceiptCard({
-  expense,
-  isExpanded,
-  onToggle,
-  onDelete,
-  currentUserId,
-  partnerData,
+  expense, isExpanded, onToggle, onDelete, currentUserId, partnerData,
 }: {
-  expense: Expense;
-  isExpanded: boolean;
-  onToggle: () => void;
-  onDelete: () => void;
+  expense: Expense; isExpanded: boolean; onToggle: () => void; onDelete: () => void;
   currentUserId: string;
   partnerData?: { uid: string; displayName: string; photoURL: string };
 }) {
   const catDef = getCategoryDef(expense.category);
 
   return (
-    <motion.div layout className="bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl overflow-hidden">
-      {/* Header row */}
-      <motion.div
-        className="flex items-center gap-3 p-4 cursor-pointer"
-        onClick={onToggle}
-        whileTap={{ scale: 0.98 }}
-      >
-        <div
-          className="w-10 h-10 rounded-full flex items-center justify-center text-[18px] flex-shrink-0"
-          style={{ background: catDef.light }}
-        >
+    <motion.div layout className="bg-white border border-black/[0.06] rounded-2xl overflow-hidden shadow-sm">
+      {/* Header */}
+      <motion.div className="flex items-center gap-3 p-4 cursor-pointer" onClick={onToggle} whileTap={{ scale: 0.99 }}>
+        <div className="w-10 h-10 rounded-xl flex items-center justify-center text-[18px] flex-shrink-0" style={{ background: catDef.light }}>
           {catDef.emoji}
         </div>
         <div className="flex-1 min-w-0">
-          <p className="font-outfit text-[14px] font-semibold text-[#1A1A1A] truncate">
-            {expense.merchantName}
-          </p>
+          <p className="font-outfit text-[14px] font-semibold text-[#1A1A1A] truncate">{expense.merchantName}</p>
           <p className="font-outfit text-[11px] text-[#6B6560]">
             {format(expense.date, 'd MMM yyyy')}
-            {expense.lineItems.length > 0 && ` · ${expense.lineItems.length} items`}
+            {expense.lineItems.length > 0 && ` · ${expense.lineItems.length} item${expense.lineItems.length > 1 ? 's' : ''}`}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -352,34 +367,47 @@ function ReceiptCard({
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             transition={SPRING_DEFAULT}
-            className="overflow-hidden border-t border-[#D4CEC4]"
+            className="overflow-hidden border-t border-black/[0.05]"
           >
-            <div className="p-4 pt-3 space-y-2">
+            <div className="p-4 pt-3 space-y-1.5">
+              {/* Column headers */}
+              <div className="flex items-center gap-2 pb-1 border-b border-black/[0.05] mb-2">
+                <span className="w-5 flex-shrink-0" />
+                <span className="flex-1 font-outfit text-[10px] uppercase tracking-wider text-[#6B6560]">Item</span>
+                <span className="w-20 text-right font-outfit text-[10px] uppercase tracking-wider text-[#6B6560]">Qty × Price</span>
+                <span className="w-16 text-right font-outfit text-[10px] uppercase tracking-wider text-[#6B6560]">Total</span>
+              </div>
+
               {expense.lineItems.map(item => {
                 const itemCat = getCategoryDef(item.category);
+                const unitPrice = (item as any).unitPrice || item.price / (item.quantity || 1);
                 return (
                   <div key={item.id} className="flex items-center gap-2 py-1">
-                    <span className="text-[14px]">{itemCat.emoji}</span>
-                    <span className="flex-1 font-outfit text-[13px] text-[#1A1A1A] truncate">{item.name}</span>
-                    {item.assignedTo !== 'shared' && (
-                      <span className="font-outfit text-[10px] text-[#6B6560] bg-[#fcf9f4] px-2 py-0.5 rounded-full">
-                        {item.assignedTo === 'user' ? 'You' : (partnerData?.displayName?.split(' ')[0] || 'Partner')}
+                    <span className="text-[13px] flex-shrink-0 w-5">{itemCat.emoji}</span>
+                    <span className="flex-1 font-outfit text-[12px] text-[#1A1A1A] truncate">{item.name}</span>
+                    {(item.quantity || 1) > 1 ? (
+                      <span className="w-20 text-right font-outfit text-[11px] text-[#6B6560]">
+                        {item.quantity}×{formatAUD(unitPrice)}
                       </span>
+                    ) : (
+                      <span className="w-20 text-right font-outfit text-[11px] text-[#6B6560]">—</span>
                     )}
-                    <span className="font-outfit text-[13px] text-[#1A1A1A]">{formatAUD(item.price)}</span>
+                    <span className="w-16 text-right font-outfit text-[13px] text-[#1A1A1A] font-medium">{formatAUD(item.price)}</span>
                   </div>
                 );
               })}
 
-              {/* Actions */}
-              <div className="flex items-center justify-end gap-3 pt-2 border-t border-[#D4CEC4]/50">
-                <button
-                  onClick={onDelete}
-                  className="flex items-center gap-1.5 font-outfit text-[12px] text-[#C47B6A]"
-                >
-                  <Trash2 size={12} />
-                  Delete
-                </button>
+              {/* Totals footer */}
+              <div className="pt-2 mt-1 border-t border-black/[0.05]">
+                <div className="flex justify-between items-center">
+                  <button onClick={onDelete} className="flex items-center gap-1 font-outfit text-[11px] text-[#C47B6A]">
+                    <Trash2 size={11} /> Delete
+                  </button>
+                  <div className="text-right">
+                    <p className="font-serif text-[15px] text-[#1A1A1A] font-semibold">{formatAUD(expense.total)}</p>
+                    <p className="font-outfit text-[10px] text-[#6B6560]">{expense.lineItems.length} item{expense.lineItems.length > 1 ? 's' : ''}</p>
+                  </div>
+                </div>
               </div>
             </div>
           </motion.div>
@@ -639,37 +667,113 @@ function ScanReceiptSheet({
 
           {/* Results */}
           {scanned && (
-            <div className="space-y-4">
+            <motion.div
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="space-y-4"
+            >
               {imageURL && (
-                <img src={imageURL} className="rounded-xl w-full max-h-48 object-contain" alt="Receipt" />
+                <div className="relative">
+                  <img src={imageURL} className="rounded-2xl w-full max-h-48 object-contain bg-black/5" alt="Receipt" />
+                  <div className="absolute inset-0 rounded-2xl bg-gradient-to-t from-black/20 to-transparent" />
+                </div>
               )}
 
-              <div className="bg-[#EDE8DF] rounded-2xl p-4">
-                <h3 className="font-serif text-[20px] text-[#1A1A1A]">{scanned.merchantName}</h3>
-                <p className="font-outfit text-[28px] text-[#B8955A] mt-1">{formatAUD(scanned.total)}</p>
+              {/* Summary card */}
+              <div className="bg-[#1A1A1A] rounded-2xl p-4 relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-32 h-32 rounded-full bg-[#B8955A] opacity-10 blur-2xl" />
+                <p className="font-outfit text-[10px] uppercase tracking-[2px] text-[#B8955A] mb-1">Merchant</p>
+                <h3 className="font-serif text-[20px] text-white mb-3">{scanned.merchantName}</h3>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <p className="font-outfit text-[9px] uppercase tracking-wider text-white/40">Subtotal</p>
+                    <p className="font-serif text-[15px] text-white">{formatAUD((scanned as any).subtotal || scanned.total)}</p>
+                  </div>
+                  <div>
+                    <p className="font-outfit text-[9px] uppercase tracking-wider text-white/40">Tax</p>
+                    <p className="font-serif text-[15px] text-white">{formatAUD((scanned as any).tax || 0)}</p>
+                  </div>
+                  <div>
+                    <p className="font-outfit text-[9px] uppercase tracking-wider text-white/40">Total</p>
+                    <p className="font-serif text-[16px] text-[#B8955A] font-semibold">{formatAUD(scanned.total)}</p>
+                  </div>
+                </div>
               </div>
 
-              <div className="space-y-2">
-                <p className="font-outfit text-[11px] uppercase tracking-widest text-[#B8955A]">Line Items</p>
-                {scanned.lineItems.map((item, i) => {
-                  const catDef = getCategoryDef(item.category);
-                  return (
-                    <div key={i} className="flex items-center gap-3 p-3 bg-[#EDE8DF] rounded-xl border border-[#D4CEC4]">
-                      <span className="text-[16px]">{catDef.emoji}</span>
-                      <span className="flex-1 font-outfit text-[13px] text-[#1A1A1A]">{item.name}</span>
-                      <span className="font-outfit text-[13px] text-[#6B6560]">{formatAUD(item.price)}</span>
-                    </div>
-                  );
-                })}
+              {/* Line items with qty × unit price */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="font-outfit text-[10px] uppercase tracking-[2px] text-[#B8955A]">
+                    {scanned.lineItems.length} Line Item{scanned.lineItems.length > 1 ? 's' : ''}
+                  </p>
+                  {/* Category breakdown mini chart */}
+                  <div className="flex gap-1">
+                    {Object.entries(
+                      scanned.lineItems.reduce((acc: any, item) => {
+                        acc[item.category] = (acc[item.category] || 0) + item.price;
+                        return acc;
+                      }, {})
+                    ).slice(0, 3).map(([cat, amt]: any) => (
+                      <span
+                        key={cat}
+                        className="font-outfit text-[9px] px-2 py-0.5 rounded-full text-white"
+                        style={{ background: getCategoryDef(cat).color }}
+                      >
+                        {getCategoryDef(cat).emoji} {Math.round((amt / scanned.total) * 100)}%
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Column headers */}
+                <div className="flex gap-2 px-3 py-1.5 bg-[#EDE8DF] rounded-t-xl border border-[#D4CEC4] border-b-0">
+                  <span className="flex-1 font-outfit text-[10px] uppercase tracking-wider text-[#6B6560]">Item</span>
+                  <span className="w-24 text-right font-outfit text-[10px] uppercase tracking-wider text-[#6B6560]">Qty × Unit</span>
+                  <span className="w-16 text-right font-outfit text-[10px] uppercase tracking-wider text-[#6B6560]">Total</span>
+                </div>
+
+                <div className="bg-[#EDE8DF] rounded-b-xl border border-[#D4CEC4] border-t-0 overflow-hidden">
+                  {scanned.lineItems.map((item, i) => {
+                    const catDef = getCategoryDef(item.category);
+                    const unitP = (item as any).unitPrice || item.price / (item.quantity || 1);
+                    return (
+                      <motion.div
+                        key={i}
+                        initial={{ opacity: 0, x: -12 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: i * 0.04 }}
+                        className={`flex items-center gap-2 px-3 py-2.5 ${
+                          i < scanned.lineItems.length - 1 ? 'border-b border-[#D4CEC4]/60' : ''
+                        }`}
+                      >
+                        <span className="text-[14px] flex-shrink-0">{catDef.emoji}</span>
+                        <span className="flex-1 font-outfit text-[12px] text-[#1A1A1A] truncate">{item.name}</span>
+                        {(item.quantity || 1) > 1 ? (
+                          <span className="w-24 text-right font-outfit text-[11px] text-[#6B6560]">
+                            {item.quantity}×{formatAUD(unitP)}
+                          </span>
+                        ) : (
+                          <span className="w-24 text-right font-outfit text-[11px] text-[#6B6560]">
+                            {formatAUD(unitP)}
+                          </span>
+                        )}
+                        <span className="w-16 text-right font-outfit text-[13px] text-[#1A1A1A] font-semibold">
+                          {formatAUD(item.price)}
+                        </span>
+                      </motion.div>
+                    );
+                  })}
+                </div>
               </div>
 
               {error && (
-                <p className="font-outfit text-[13px] text-[#C47B6A]">{error}</p>
+                <p className="font-outfit text-[13px] text-[#C47B6A] bg-red-50 p-3 rounded-xl">{error}</p>
               )}
 
-              <div className="flex gap-3 pt-2">
+              {/* Actions */}
+              <div className="flex gap-3 pt-1 pb-2">
                 <button
-                  onClick={() => { setScanned(null); setImageURL(null); setError(''); cameraRef.current?.click(); }}
+                  onClick={() => { setScanned(null); setImageURL(null); setError(''); }}
                   className="flex-1 h-12 rounded-full border border-[#D4CEC4] font-outfit text-[14px] text-[#6B6560]"
                 >
                   Retake
@@ -684,7 +788,7 @@ function ScanReceiptSheet({
                   {saving ? 'Saving...' : 'Save Receipt'}
                 </motion.button>
               </div>
-            </div>
+            </motion.div>
           )}
         </div>
       </motion.div>
