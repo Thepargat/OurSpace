@@ -77,7 +77,7 @@ export default function MoreTab({ onNavigate }: MoreTabProps) {
                         <div className="font-outfit text-[12px] text-[#6B6560] leading-tight">{item.subtitle}</div>
                       </div>
                       <div className="w-6 flex-shrink-0 flex justify-end">
-                        <ChevronRight size={18} className="text-[#D4CEC4]" />
+                        <ChevronRight size={18} className="text-[#B8955A] opacity-50" />
                       </div>
                     </motion.button>
                   );

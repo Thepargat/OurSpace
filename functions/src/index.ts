@@ -1,5 +1,6 @@
 import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
+import fetch from "node-fetch";
 
 admin.initializeApp();
 
@@ -222,3 +223,111 @@ export const onWeeklySummary = functions.firestore
       await sendToUser(uid, "weeklySummary", payload);
     }
   });
+
+// --- GOOGLE CALENDAR SYNC (BACKGROUND) ---
+
+/**
+ * Scheduled Sync: Runs every 30 minutes to sync all connected Google Calendars
+ */
+export const scheduledCalendarSync = functions.pubsub
+  .schedule("every 30 minutes")
+  .onRun(async (context) => {
+    const users = await db.collection("users").where("calendarConnected", "==", true).get();
+    
+    for (const userSnap of users.docs) {
+      const uid = userSnap.id;
+      const userData = userSnap.data();
+      const householdId = userData.householdId;
+      if (!householdId) continue;
+
+      try {
+        await syncUserCalendar(uid, householdId);
+      } catch (error) {
+        console.error(`Background sync failed for user ${uid}:`, error);
+      }
+    }
+  });
+
+async function syncUserCalendar(userId: string, householdId: string) {
+  const tokenDoc = await db.collection("users").doc(userId).collection("googleCalendarToken").doc("current").get();
+  if (!tokenDoc.exists) return;
+
+  let { accessToken, refreshToken, expiresAt } = tokenDoc.data()!;
+  
+  // Refresh if expiring soon
+  if (Date.now() + 5 * 60 * 1000 > expiresAt) {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+
+    if (!refreshToken || !clientId || !clientSecret) return;
+
+    const response = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
+        grant_type: "refresh_token",
+      }),
+    });
+
+    if (response.ok) {
+      const data: any = await response.json();
+      accessToken = data.access_token;
+      expiresAt = Date.now() + data.expires_in * 1000;
+      await db.collection("users").doc(userId).collection("googleCalendarToken").doc("current").update({
+        accessToken,
+        expiresAt,
+        updatedAt: new Date().toISOString()
+      });
+    }
+  }
+
+  // Fetch events
+  const timeMin = new Date().toISOString();
+  const timeMax = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); // 30 days ahead
+
+  const gResponse = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+
+  if (!gResponse.ok) return;
+
+  const data: any = await gResponse.json();
+  const googleEvents = data.items || [];
+  const eventsRef = db.collection("households").doc(householdId).collection("events");
+
+  for (const gEvent of googleEvents) {
+    const ourSpaceId = gEvent.extendedProperties?.private?.ourspace_id;
+    
+    const eventSnapshot = ourSpaceId 
+      ? await eventsRef.doc(ourSpaceId).get() 
+      : await eventsRef.where(`googleEventIds.${userId}`, "==", gEvent.id).limit(1).get() || await eventsRef.where("googleEventId", "==", gEvent.id).limit(1).get();
+
+    const eventData = {
+      title: gEvent.summary || "Untitled Event",
+      startTime: gEvent.start.dateTime || gEvent.start.date,
+      endTime: gEvent.end.dateTime || gEvent.end.date,
+      notes: gEvent.description || "",
+      updatedAt: new Date().toISOString(),
+      [`googleEventIds.${userId}`]: gEvent.id
+    };
+
+    if (ourSpaceId && eventSnapshot.exists) {
+      await eventsRef.doc(ourSpaceId).update(eventData);
+    } else if (eventSnapshot && !eventSnapshot.exists && !ourSpaceId) {
+      // New event from Google
+      await eventsRef.add({
+        ...eventData,
+        googleEventId: gEvent.id,
+        category: 'Personal',
+        source: 'google',
+        createdBy: userId,
+        householdId,
+        isShared: false
+      });
+    }
+  }
+}

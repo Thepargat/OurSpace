@@ -172,8 +172,11 @@ export const generateWeeklySummary = async (
   const bucketItems = bucketSnap.docs.map(d => d.data().title).join(", ");
 
   // 3. Gemini Call
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-preview" });
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+  if (!apiKey) return null;
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
 
   const prompt = `Write a warm weekly summary for a couple based on their real data.
 Week of ${format(weekStart, "MMM d")} - ${format(weekEnd, "MMM d")}.

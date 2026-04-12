@@ -37,8 +37,9 @@ import { useAuth } from '../AuthWrapper';
 import PageTransition from '../ui/PageTransition';
 import BottomSheet from '../ui/BottomSheet';
 import AnimatedButton from '../ui/AnimatedButton';
-import { syncGoogleCalendar, pushToGoogleCalendar, detectConflicts, CalendarEvent } from '../../services/calendarSync';
+import { syncGoogleCalendar, pushToGoogleCalendar, detectConflicts, CalendarEvent, syncEventToBothPartners } from '../../services/calendarSync';
 import { notifyPartner } from '../../services/notificationService';
+import { Share2, Globe, Lock, RefreshCw } from 'lucide-react';
 
 const CATEGORIES = [
   { name: 'Work', color: '#8B9EB7' },
@@ -71,6 +72,7 @@ export default function CalendarTab() {
   const [newNotes, setNewNotes] = useState("");
   const [newReminder, setNewReminder] = useState('None');
   const [newRepeat, setNewRepeat] = useState('None');
+  const [isShared, setIsShared] = useState(true);
   const [syncToGoogle, setSyncToGoogle] = useState(true);
 
   // Real-time events listener
@@ -157,16 +159,28 @@ export default function CalendarTab() {
       source: 'ourspace',
       createdBy: user.uid,
       householdId,
+      isShared,
       updatedAt: new Date().toISOString()
     };
 
     try {
-      if (syncToGoogle && googleAccessToken) {
-        const gId = await pushToGoogleCalendar(eventData, googleAccessToken, user.uid);
-        if (gId) eventData.googleEventId = gId;
+      setIsSyncing(true);
+      const docRef = await addDoc(collection(db, "households", householdId, "events"), eventData);
+      
+      if (isShared) {
+        // Sync to both partners' Google Calendars
+        await syncEventToBothPartners(docRef.id, householdId);
+      } else if (syncToGoogle && googleAccessToken) {
+        // Sync only to owner's Google Calendar
+        const gId = await pushToGoogleCalendar({ ...eventData, id: docRef.id }, googleAccessToken, user.uid);
+        if (gId) {
+          await updateDoc(docRef, { 
+            googleEventId: gId,
+            [`googleEventIds.${user.uid}`]: gId 
+          });
+        }
       }
 
-      await addDoc(collection(db, "households", householdId, "events"), eventData);
       await detectConflicts(householdId);
 
       // Trigger Notification
@@ -233,10 +247,21 @@ export default function CalendarTab() {
         {/* Header */}
         <div className="px-6 pt-16 pb-6">
           <motion.div {...fadeUp(0)} className="mb-8">
-            <h1 className="font-serif text-[48px] font-light text-[#1A1A1A] leading-[1.1]">
-              {format(currentDate, 'MMMM')}
-              <br />
-              {format(currentDate, 'yyyy')}
+            <h1 className="font-serif text-[48px] font-light text-[#1A1A1A] leading-[1.1] flex items-center justify-between">
+              <div>
+                {format(currentDate, 'MMMM')}
+                <br />
+                {format(currentDate, 'yyyy')}
+              </div>
+              {isSyncing && (
+                <motion.div
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                  className="mr-4 p-2 bg-[#EDE8DF] rounded-full border border-[#D4CEC4]"
+                >
+                  <RefreshCw size={16} className="text-[#B8955A]" />
+                </motion.div>
+              )}
             </h1>
           </motion.div>
           
@@ -408,8 +433,13 @@ export default function CalendarTab() {
                         <div className="flex justify-between items-start">
                           <div>
                             <h4 className="font-serif text-[18px] text-[#1A1A1A] mb-1 leading-tight">{event.title}</h4>
-                            <div className="flex items-center gap-2 text-[#6B6560] font-outfit text-[13px]">
+                            <div className="flex items-center gap-3 text-[#6B6560] font-outfit text-[13px]">
                               <span>{format(parseISO(event.startTime), 'h:mm a')} – {format(parseISO(event.endTime), 'h:mm a')}</span>
+                              {event.isShared && (
+                                <span className="flex items-center gap-1 text-[#B8955A] bg-[#B8955A]/10 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider">
+                                  <Globe size={10} /> Together
+                                </span>
+                              )}
                             </div>
                             {isConflict && partnerEvent && (
                               <div className="mt-2 text-[#C97B6A] font-outfit text-xs font-medium">
@@ -419,8 +449,14 @@ export default function CalendarTab() {
                           </div>
                           
                           <div className="flex items-center gap-2">
-                            {event.source === 'google' && (
-                              <CalendarIcon size={16} className="text-[#6B6560] opacity-40" />
+                            {event.googleEventIds && (
+                              <div className="flex -space-x-2 mr-2">
+                                {Object.keys(event.googleEventIds).map(uid => (
+                                  <div key={uid} className="w-4 h-4 rounded-full bg-[#B8955A] border border-[#EDE8DF] flex items-center justify-center">
+                                    <CalendarIcon size={8} className="text-white" />
+                                  </div>
+                                ))}
+                              </div>
                             )}
                             {event.createdBy !== user?.uid && (
                               <div className="w-5 h-5 rounded-full bg-[#D4CEC4] border border-[#F8F4EE]" />
@@ -565,12 +601,35 @@ export default function CalendarTab() {
                 />
               </div>
 
-              {/* Google Sync Toggle */}
-              {userData?.calendarConnected && (
-                <div className="flex items-center justify-between bg-[#EDE8DF] p-4 rounded-xl border border-[#D4CEC4]">
+              {/* Shared with Partner Toggle */}
+              <div className="flex items-center justify-between bg-[#EDE8DF] p-4 rounded-2xl border border-[#D4CEC4]">
+                <div className="flex items-center gap-3">
+                  <div className={`p-2 rounded-lg ${isShared ? 'bg-[#1A1A1A] text-white' : 'bg-[#D4CEC4] text-[#6B6560]'}`}>
+                    {isShared ? <Globe size={18} /> : <Lock size={18} />}
+                  </div>
+                  <div>
+                    <span className="font-outfit text-[15px] font-medium text-[#1A1A1A] block">Shared with Partner</span>
+                    <span className="font-outfit text-[12px] text-[#6B6560]">Syncs to both Google Calendars</span>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setIsShared(!isShared)}
+                  className={`w-12 h-6 rounded-full transition-all relative ${isShared ? 'bg-[#1A1A1A]' : 'bg-[#D4CEC4]'}`}
+                >
+                  <motion.div 
+                    animate={{ x: isShared ? 24 : 4 }}
+                    transition={spring}
+                    className="absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm"
+                  />
+                </button>
+              </div>
+
+              {/* Google Sync Toggle (Only if not shared, since shared always syncs to both) */}
+              {!isShared && userData?.calendarConnected && (
+                <div className="flex items-center justify-between bg-[#EDE8DF] p-4 rounded-xl border border-[#D4CEC4] opacity-80">
                   <div className="flex items-center gap-3">
                     <CalendarIcon size={20} className="text-[#B8955A]" />
-                    <span className="font-outfit text-sm text-[#1A1A1A]">Also add to Google Calendar</span>
+                    <span className="font-outfit text-sm text-[#1A1A1A]">Also add to my Google Calendar</span>
                   </div>
                   <button 
                     onClick={() => setSyncToGoogle(!syncToGoogle)}

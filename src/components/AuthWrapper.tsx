@@ -93,7 +93,9 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
     if (!authState.user) return false;
     
     const provider = new GoogleAuthProvider();
-    provider.addScope('https://www.googleapis.com/auth/calendar');
+    provider.addScope('https://www.googleapis.com/auth/calendar.events');
+    provider.addScope('https://www.googleapis.com/auth/calendar.readonly');
+    
     // Request offline access to get a refresh token
     provider.setCustomParameters({
       access_type: 'offline',
@@ -102,33 +104,42 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
     
     try {
       const result = await signInWithPopup(auth, provider);
+      
+      // The credential only contains the short-lived accessToken
       const credential = GoogleAuthProvider.credentialFromResult(result);
       const accessToken = credential?.accessToken;
-      // Note: Firebase signInWithPopup might not return the refreshToken directly in the credential
-      // for some configurations. However, we will store what we get.
-      // If it's missing, we'll rely on the user re-authenticating once, but we'll set up the structure.
+      
+      // The refreshToken is found in the _tokenResponse for signInWithPopup
+      // when access_type=offline and prompt=consent are used
+      const tokenResponse = (result as any)._tokenResponse;
+      const refreshToken = tokenResponse?.refreshToken;
       
       if (accessToken) {
-        const tokenData = {
+        const tokenData: any = {
           accessToken,
-          refreshToken: (result as { _tokenResponse?: { refreshToken?: string } })._tokenResponse?.refreshToken || null,
-          expiresAt: Date.now() + 3600 * 1000, // Google tokens usually last 1h
+          expiresAt: Date.now() + 3500 * 1000, // 3500 to be safe (Google is 3600)
           updatedAt: new Date().toISOString()
         };
 
-        // Store in Firestore as requested
-        await setDoc(doc(db, "users", authState.user.uid, "googleCalendarToken", "current"), tokenData);
+        // ONLY update refreshToken if it's present (usually only on first consent)
+        if (refreshToken) {
+          tokenData.refreshToken = refreshToken;
+        }
+
+        // Store in Firestore
+        await setDoc(doc(db, "users", authState.user.uid, "googleCalendarToken", "current"), tokenData, { merge: true });
         
         // Update user document
         await updateDoc(doc(db, "users", authState.user.uid), {
           calendarConnected: true,
+          calendarEmail: result.user.email,
           updatedAt: new Date().toISOString()
         });
         
         setAuthState(prev => ({
           ...prev,
           googleAccessToken: accessToken,
-          userData: { ...prev.userData, calendarConnected: true }
+          userData: { ...prev.userData, calendarConnected: true, calendarEmail: result.user.email }
         }));
         
         return true;

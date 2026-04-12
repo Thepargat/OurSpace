@@ -457,14 +457,14 @@ const categorizeWithGemini = async (
   itemName: string,
   merchantName: string
 ): Promise<CategoryResult> => {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY || import.meta.env.GEMINI_API_KEY;
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
   if (!apiKey) {
     return { cat: 'other', confidence: 0.3, source: 'ai' };
   }
 
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-flash-latest' });
 
     const prompt = `Australian receipt line item categorization. Category REQUIRED — NEVER return "other" as your ONLY option.
 Item: "${itemName}" | Merchant: "${merchantName}"

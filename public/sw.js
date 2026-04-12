@@ -44,7 +44,7 @@ self.addEventListener('notificationclick', (event) => {
   );
 });
 
-const CACHE_NAME = "ourspace-v1";
+const CACHE_NAME = "ourspace-v6";
 const STATIC_ASSETS = [
   "/",
   "/index.html",

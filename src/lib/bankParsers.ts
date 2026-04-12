@@ -302,19 +302,16 @@ export const parseCSV = (csv: string, filename: string): BankTransaction[] => {
 export const parsePDF = async (
   file: File
 ): Promise<BankTransaction[]> => {
-  const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY
-    || (import.meta as any).env?.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('No Gemini API key configured');
+  const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
+  if (!apiKey) throw new Error('Bank parsing requires VITE_GEMINI_API_KEY');
 
-  // Convert PDF to base64
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: 'gemini-flash-latest' });
   const arrayBuffer = await file.arrayBuffer();
   const bytes = new Uint8Array(arrayBuffer);
   let binary = '';
   bytes.forEach(b => binary += String.fromCharCode(b));
   const base64 = btoa(binary);
-
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
   const result = await model.generateContent([
     {

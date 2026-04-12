@@ -141,7 +141,10 @@ export const calculateMetrics = (data: any, userId: string, partnerId: string): 
 };
 
 export const generateInsights = async (metrics: RelationshipMetrics, userName: string, partnerName: string): Promise<Insight[]> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+  if (!apiKey) return [];
+  
+  const ai = new GoogleGenAI({ apiKey });
   
   const prompt = `You are a warm caring relationship coach. Analyse these real metrics from a couple's shared app and generate 3-4 short warm actionable insights. 
   
@@ -154,9 +157,9 @@ export const generateInsights = async (metrics: RelationshipMetrics, userName: s
   - Chores completed: ${metrics.myChores + metrics.partnerChores}
   - Money spent: $${metrics.totalSpend.toFixed(2)}
   Find 1-2 genuine patterns. Be warm and specific."
-
+  
   Be specific to their numbers. Never generic. Never preachy. Always warm and encouraging. Return ONLY a JSON array. No markdown. No explanation.
-
+  
   Format:
   [{
     "type": "date_night|chores|groceries|memories|spending|positive|mood",
@@ -167,7 +170,7 @@ export const generateInsights = async (metrics: RelationshipMetrics, userName: s
   }]`;
 
   const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
+    model: "gemini-flash-latest",
     contents: prompt,
     config: {
       responseMimeType: "application/json",

@@ -41,7 +41,10 @@ export const getMoodInsights = async (
   partnerId: string,
   context: { dateNights: number; chores: number; spending: number }
 ) => {
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+  if (!apiKey) return [];
+  
+  const ai = new GoogleGenAI({ apiKey });
 
   // Fetch last 30 days of moods
   const moodsRef = collection(db, 'households', householdId, 'moods');
@@ -74,7 +77,7 @@ export const getMoodInsights = async (
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-flash-latest",
       contents: prompt,
       config: {
         responseMimeType: "application/json",

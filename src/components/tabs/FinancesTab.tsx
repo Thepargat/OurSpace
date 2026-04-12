@@ -239,8 +239,8 @@ async function scanReceipt(file: File, householdId: string): Promise<{
   lineItems: LineItem[];
   date?: string;
 }> {
-  const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || (import.meta as any).env?.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('No API key');
+  const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
+  if (!apiKey) throw new Error('Finance scanning requires VITE_GEMINI_API_KEY');
 
   const reader = new FileReader();
   const base64 = await new Promise<string>((res, rej) => {
@@ -250,7 +250,7 @@ async function scanReceipt(file: File, householdId: string): Promise<{
   });
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
   const result = await model.generateContent([
     { inlineData: { mimeType: file.type as any, data: base64 } },
@@ -489,7 +489,8 @@ function ScanReceiptSheet({
   const [scanned, setScanned] = useState<Awaited<ReturnType<typeof scanReceipt>> | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const fileRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
+  const galleryRef = useRef<HTMLInputElement>(null);
   const [imageURL, setImageURL] = useState<string | null>(null);
 
   const handleFile = async (file: File) => {
@@ -515,21 +516,26 @@ function ScanReceiptSheet({
 
       // Upload image if available
       let savedImageURL = '';
-      if (imageURL && fileRef.current?.files?.[0]) {
+      if (imageURL) {
         try {
-          const file = fileRef.current.files[0];
-          const storageRef = ref(storage, `households/${householdId}/receipts/${Date.now()}_${file.name}`);
-          await uploadBytes(storageRef, file);
-          savedImageURL = await getDownloadURL(storageRef);
-        } catch {
+          const file = cameraRef.current?.files?.[0] || galleryRef.current?.files?.[0];
+          if (file) {
+            const storageRef = ref(storage, `households/${householdId}/receipts/${Date.now()}_${file.name}`);
+            await uploadBytes(storageRef, file);
+            savedImageURL = await getDownloadURL(storageRef);
+          }
+        } catch (e) {
           // Storage unavailable (Spark plan) — continue without image
         }
       }
 
+      const expenseDate = scanned.date ? new Date(scanned.date) : now;
+      const finalDate = isNaN(expenseDate.getTime()) ? now : expenseDate;
+
       await addDoc(collection(db, `households/${householdId}/expenses`), {
         merchantName: scanned.merchantName,
         total: scanned.total,
-        date: scanned.date ? new Date(scanned.date) : now,
+        date: finalDate,
         category: scanned.lineItems[0]?.category || 'other',
         lineItems: scanned.lineItems,
         paidBy: userId,
@@ -574,29 +580,52 @@ function ScanReceiptSheet({
 
         <div className="flex-1 overflow-y-auto px-6 pb-8">
           <input
-            ref={fileRef}
+            ref={cameraRef}
             type="file"
             className="hidden"
             accept="image/*"
             capture="environment"
             onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
           />
+          <input
+            ref={galleryRef}
+            type="file"
+            className="hidden"
+            accept="image/*"
+            onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
+          />
 
           {/* Upload button */}
           {!scanned && !scanning && (
-            <motion.button
-              whileTap={{ scale: 0.97 }}
-              onClick={() => fileRef.current?.click()}
-              className="w-full border-2 border-dashed border-[#D4CEC4] rounded-2xl p-12 flex flex-col items-center gap-4"
-            >
-              <div className="w-16 h-16 rounded-full bg-[#EDE8DF] flex items-center justify-center">
-                <span className="text-2xl">📷</span>
-              </div>
-              <div className="text-center">
-                <p className="font-serif text-[18px] text-[#1A1A1A]">Take a photo</p>
-                <p className="font-outfit text-[13px] text-[#6B6560] mt-1">or choose from your library</p>
-              </div>
-            </motion.button>
+            <div className="grid grid-cols-1 gap-4">
+              <motion.button
+                whileTap={{ scale: 0.97 }}
+                onClick={() => cameraRef.current?.click()}
+                className="w-full bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl p-8 flex flex-col items-center gap-3 active:bg-[#E5E0D7] transition-colors"
+              >
+                <div className="w-12 h-12 rounded-full bg-white/50 flex items-center justify-center text-xl shadow-sm">
+                  📷
+                </div>
+                <div className="text-center">
+                  <p className="font-serif text-[17px] text-[#1A1A1A]">Use Camera</p>
+                  <p className="font-outfit text-[12px] text-[#6B6560]">Take a new photo now</p>
+                </div>
+              </motion.button>
+
+              <motion.button
+                whileTap={{ scale: 0.97 }}
+                onClick={() => galleryRef.current?.click()}
+                className="w-full bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl p-8 flex flex-col items-center gap-3 active:bg-[#E5E0D7] transition-colors"
+              >
+                <div className="w-12 h-12 rounded-full bg-white/50 flex items-center justify-center text-xl shadow-sm">
+                  🖼️
+                </div>
+                <div className="text-center">
+                  <p className="font-serif text-[17px] text-[#1A1A1A]">Photo Library</p>
+                  <p className="font-outfit text-[12px] text-[#6B6560]">Choose from your phone</p>
+                </div>
+              </motion.button>
+            </div>
           )}
 
           {/* Scanning */}
@@ -642,7 +671,7 @@ function ScanReceiptSheet({
 
               <div className="flex gap-3 pt-2">
                 <button
-                  onClick={() => { setScanned(null); setImageURL(null); setError(''); fileRef.current?.click(); }}
+                  onClick={() => { setScanned(null); setImageURL(null); setError(''); cameraRef.current?.click(); }}
                   className="flex-1 h-12 rounded-full border border-[#D4CEC4] font-outfit text-[14px] text-[#6B6560]"
                 >
                   Retake

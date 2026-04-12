@@ -15,7 +15,10 @@ import {
   Shield, 
   FileText,
   LogOut,
-  Check
+  Check,
+  Globe,
+  RefreshCcw,
+  Link as LinkIcon
 } from 'lucide-react';
 import { doc, updateDoc, onSnapshot, collection, query, where, getDocs, addDoc, setDoc, limit, Timestamp, deleteDoc } from 'firebase/firestore';
 import { format } from 'date-fns';
@@ -117,7 +120,7 @@ const SectionLabel = ({ children }: { children: string }) => (
 // --- Main Component ---
 
 export default function SettingsTab({ onBack }: { onBack: () => void }) {
-  const { user, userData, householdId } = useAuth();
+  const { user, userData, householdId, googleAccessToken, connectGoogleCalendar, clearGoogleToken } = useAuth();
   const [isEditingName, setIsEditingName] = useState(false);
   const [tempName, setTempName] = useState(userData?.displayName || user?.displayName || "");
   const [partner, setPartner] = useState<any>(null);
@@ -501,6 +504,51 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
                 onChange={(e) => handleUpdateDate('birthday', e.target.value)}
               />
             </div>
+          </div>
+        </motion.div>
+
+        {/* Section: Integrations */}
+        <motion.div
+          initial={{ opacity: 0, y: 32, filter: "blur(4px)" }}
+          animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+          transition={{ duration: 0.5, delay: 0.28 }}
+        >
+          <SectionLabel>Integrations</SectionLabel>
+          <div className="bg-[#F8F4EE] rounded-[16px] border border-[#D4CEC4] overflow-hidden">
+            <SettingsRow 
+              icon={Globe}
+              label="Google Calendar"
+              subtext={userData?.calendarConnected ? (userData.calendarEmail || "Connected") : "Not linked"}
+              rightElement={
+                userData?.calendarConnected ? (
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); clearGoogleToken(); }}
+                    className="text-[12px] font-outfit font-medium text-[#C97B6A] px-3 py-1 bg-[#F5E6E0] rounded-full"
+                  >
+                    Disconnect
+                  </button>
+                ) : (
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); connectGoogleCalendar(); }}
+                    className="text-[12px] font-outfit font-medium text-[#B8955A] px-3 py-1 bg-[#EDE8DF] rounded-full"
+                  >
+                    Connect
+                  </button>
+                )
+              }
+              showChevron={false}
+            />
+            {partner && (
+              <SettingsRow 
+                icon={LinkIcon}
+                label={`${partner.displayName}'s Sync`}
+                subtext={partner.calendarConnected ? "Connected" : "Not connected"}
+                showChevron={false}
+                rightElement={
+                  <div className={`w-2 h-2 rounded-full ${partner.calendarConnected ? 'bg-[#7FAF7B]' : 'bg-[#D4CEC4]'}`} />
+                }
+              />
+            )}
           </div>
         </motion.div>
 

@@ -508,8 +508,10 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
     if (!userData?.householdId) return;
     setLoadingGifts(true);
     setSelectedDateForGifts(date);
-    
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+    const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+    if (!apiKey) return;
+
+    const ai = new GoogleGenAI({ apiKey });
     
     // Get context
     const savingsSnap = await getDocs(collection(db, "households", userData.householdId, "savingsGoals"));
@@ -527,7 +529,7 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
 
     try {
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash-preview",
+        model: "gemini-flash-latest",
         contents: prompt,
         config: {
           responseMimeType: "application/json",
