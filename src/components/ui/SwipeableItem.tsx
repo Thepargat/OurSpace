@@ -60,7 +60,8 @@ export default function SwipeableItem({
     }
   });
 
-  const bindProps = bind() as Record<string, unknown>;
+  // bind helper — cast to avoid gesture library typings conflict
+  const bindProps = (bind as any)() as Record<string, unknown>;
 
   return (
     <AnimatePresence>

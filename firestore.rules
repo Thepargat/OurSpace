@@ -59,15 +59,41 @@ service cloud.firestore {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated();
       allow update: if isAuthenticated();
+      allow delete: if isAuthenticated();
+    }
+
+    match /emailInvites/{inviteId} {
+      allow read: if isAuthenticated() && request.auth.token.email == resource.data.email;
+      allow create: if isAuthenticated();
+      allow delete: if isAuthenticated();
+    }
+
+    function isJoiningHousehold() {
+      return isAuthenticated() &&
+             request.resource.data.memberIds.size() == resource.data.memberIds.size() + 1 &&
+             request.auth.uid in request.resource.data.memberIds &&
+             !(request.auth.uid in resource.data.memberIds);
     }
 
     // Households — only members can read or write
     match /households/{householdId} {
       allow read: if isHouseholdMember(householdId);
       allow create: if isAuthenticated() && isValidHousehold(request.resource.data);
-      allow update: if isHouseholdMember(householdId) && isValidHousehold(request.resource.data);
+      allow update: if (isHouseholdMember(householdId) && isValidHousehold(request.resource.data)) || isJoiningHousehold();
 
-      // Everything inside a household
+      // Shared Household Memories
+      match /memories/{memoryId} {
+        allow read: if isHouseholdMember(householdId);
+        allow create: if isHouseholdMember(householdId) && 
+                      request.resource.data.uploadedBy == request.auth.uid;
+        allow update: if isHouseholdMember(householdId) && 
+                      (request.resource.data.uploadedBy == request.auth.uid || 
+                       resource.data.uploadedBy == request.auth.uid);
+        allow delete: if isHouseholdMember(householdId) && 
+                      resource.data.uploadedBy == request.auth.uid;
+      }
+
+      // Everything else inside a household
       match /{allSubcollections=**} {
         allow read, write: if isHouseholdMember(householdId);
       }

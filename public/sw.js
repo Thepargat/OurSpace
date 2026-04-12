@@ -2,12 +2,12 @@ importScripts('https://www.gstatic.com/firebasejs/9.0.0/firebase-app-compat.js')
 importScripts('https://www.gstatic.com/firebasejs/9.0.0/firebase-messaging-compat.js');
 
 firebase.initializeApp({
-  apiKey: "AIzaSyAIyStr80n8GcLZ5PnxIAzWbQfAxr4E_OA",
-  authDomain: "mycount-67709.firebaseapp.com",
-  projectId: "mycount-67709",
-  storageBucket: "mycount-67709.firebasestorage.app",
-  messagingSenderId: "573847203736",
-  appId: "1:573847203736:web:88ab8b67e9b9e27f7245ed"
+  apiKey: "AIzaSyAwH-F8niglW37Ab2jkxynU0A39BUOD-UQ",
+  authDomain: "ourspace-898d8.firebaseapp.com",
+  projectId: "ourspace-898d8",
+  storageBucket: "ourspace-898d8.firebasestorage.app",
+  messagingSenderId: "315282314755",
+  appId: "1:315282314755:web:e01f8872da498151aa6036"
 });
 
 const messaging = firebase.messaging();
@@ -44,7 +44,7 @@ self.addEventListener('notificationclick', (event) => {
   );
 });
 
-const CACHE_NAME = "ourspace-v1";
+const CACHE_NAME = "ourspace-v7";
 const STATIC_ASSETS = [
   "/",
   "/index.html",
@@ -87,34 +87,24 @@ self.addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Network-first for API calls (Firebase/Firestore usually handles its own persistence, but we handle general API)
-  if (url.pathname.startsWith("/api") || url.hostname.includes("googleapis.com")) {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          const clonedResponse = response.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(request, clonedResponse);
-          });
-          return response;
-        })
-        .catch(() => caches.match(request))
-    );
-    return;
+  // Network-only for Firestore/Firebase (they handle their own offline state)
+  if (url.hostname.includes("googleapis.com") || url.hostname.includes("firebase")) {
+    return; 
   }
 
-  // Cache-first for static assets
+  // Stale-While-Revalidate for static assets and general requests
   event.respondWith(
-    caches.match(request).then((response) => {
-      return (
-        response ||
-        fetch(request).then((fetchResponse) => {
-          return caches.open(CACHE_NAME).then((cache) => {
-            cache.put(request, fetchResponse.clone());
-            return fetchResponse;
-          });
-        })
-      );
+    caches.open(CACHE_NAME).then((cache) => {
+      return cache.match(request).then((cachedResponse) => {
+        const fetchPromise = fetch(request).then((networkResponse) => {
+          if (request.method === "GET" && networkResponse.status === 200) {
+            cache.put(request, networkResponse.clone());
+          }
+          return networkResponse;
+        }).catch(() => cachedResponse); // Fallback to cache if network fails completely
+
+        return cachedResponse || fetchPromise;
+      });
     })
   );
 });

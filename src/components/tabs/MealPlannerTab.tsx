@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { ChevronLeft, ChevronRight, Loader2, Sparkles, Check, X } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { motion } from 'motion/react';
+import { ChevronLeft, ChevronRight, Loader2, Sparkles } from 'lucide-react';
 import { 
   doc, 
   onSnapshot, 
@@ -18,15 +18,18 @@ import {
   format, 
   isSameDay, 
   addWeeks, 
-  subWeeks,
-  parseISO
+  subWeeks
 } from 'date-fns';
 import BottomSheet from '../ui/BottomSheet';
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
-// Initialize Gemini
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const MODEL_NAME = "gemini-3-flash-preview";
+// Initialize Gemini helpers
+const getGeminiModel = () => {
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+  if (!apiKey) return null;
+  const genAI = new GoogleGenerativeAI(apiKey);
+  return genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+};
 
 interface MealSlot {
   breakfast: string;
@@ -159,23 +162,19 @@ export default function MealPlannerTab({ onBack }: { onBack: () => void }) {
 
     setIsGeneratingGroceries(true);
     try {
+      const model = getGeminiModel();
+      if (!model) throw new Error("AI model not available");
+
       const prompt = `These are our meals for the week: ${mealsList.join(', ')}. 
       List the ingredients needed as a simple grocery list. 
       Return ONLY a JSON array of strings. No explanation. No markdown.
       Example: ["chicken breast", "rice", "broccoli", "olive oil"]`;
 
-      const result = await ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json"
-        }
-      });
-      
-      const responseText = result.text;
+      const result = await model.generateContent(prompt);
+      const responseText = result.response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '');
       if (!responseText) throw new Error("Empty response from AI");
       
-      const ingredients = JSON.parse(responseText.trim());
+      const ingredients = JSON.parse(responseText);
 
       // Add to groceries
       for (const item of ingredients) {
@@ -207,14 +206,14 @@ export default function MealPlannerTab({ onBack }: { onBack: () => void }) {
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center bg-[#F8F4EE]">
+      <div className="flex h-full items-center justify-center bg-[#fcf9f4]">
         <Loader2 className="h-8 w-8 animate-spin text-[#B8955A]" />
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col h-full bg-[#F8F4EE]">
+    <div className="flex flex-col h-full bg-[#fcf9f4]">
       {/* Header */}
       <div className="px-6 pt-16 pb-6">
         <div className="flex items-center gap-4 mb-8">

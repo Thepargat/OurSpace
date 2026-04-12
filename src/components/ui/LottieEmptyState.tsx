@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { motion } from "motion/react";
 import { Leaf, Sun, Image as ImageIcon, Coins, Globe2 } from "lucide-react";
 

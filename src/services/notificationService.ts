@@ -1,5 +1,5 @@
 import { getToken, onMessage } from "firebase/messaging";
-import { doc, updateDoc, getDoc, collection, query, where, limit, getDocs } from "firebase/firestore";
+import { doc, updateDoc, collection, query, where, limit, getDocs } from "firebase/firestore";
 import { db, messaging } from "../firebase";
 
 export interface NotificationPrefs {

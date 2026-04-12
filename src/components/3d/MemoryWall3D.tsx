@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { useTexture, shaderMaterial } from '@react-three/drei';
 import * as THREE from 'three';
@@ -66,6 +66,7 @@ const LiquidDisplacementMaterial = shaderMaterial(
 extend({ LiquidDisplacementMaterial });
 
 declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace JSX {
     interface IntrinsicElements {
       liquidDisplacementMaterial: any;
@@ -73,28 +74,25 @@ declare global {
   }
 }
 
-const PHOTOS = [
+const FALLBACK_PHOTOS = [
   "https://images.unsplash.com/photo-1506973035872-a4ec16b8e8d9?q=80&w=1000&auto=format&fit=crop",
   "https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?q=80&w=1000&auto=format&fit=crop",
-  "https://images.unsplash.com/photo-1476514525535-07fb3b4ae5f1?q=80&w=1000&auto=format&fit=crop",
-  "https://images.unsplash.com/photo-1510798831971-661eb04b3739?q=80&w=1000&auto=format&fit=crop",
-  "https://images.unsplash.com/photo-1530789253388-582c481c54b0?q=80&w=1000&auto=format&fit=crop",
 ];
 
-function LightboxScene({ startIndex, onClose }: { startIndex: number, onClose: () => void }) {
-  const textures = useTexture(PHOTOS);
+function LightboxScene({ startIndex, onClose, photos }: { startIndex: number, onClose: () => void, photos: string[] }) {
+  const textures = useTexture(photos);
   const { viewport } = useThree();
   const materialRef = useRef<any>(null);
 
   const [currentIndex, setCurrentIndex] = useState(startIndex);
-  const [nextIndex, setNextIndex] = useState((startIndex + 1) % PHOTOS.length);
+  const [nextIndex, setNextIndex] = useState((startIndex + 1) % photos.length);
   const [isTransitioning, setIsTransitioning] = useState(false);
 
   const handleNext = () => {
     if (isTransitioning) return;
     setIsTransitioning(true);
     
-    let startTime = performance.now();
+    const startTime = performance.now();
     const duration = 1200;
     
     const animate = (time: number) => {
@@ -113,7 +111,7 @@ function LightboxScene({ startIndex, onClose }: { startIndex: number, onClose: (
         requestAnimationFrame(animate);
       } else {
         setCurrentIndex(nextIndex);
-        setNextIndex((nextIndex + 1) % PHOTOS.length);
+        setNextIndex((nextIndex + 1) % photos.length);
         if (materialRef.current) {
           materialRef.current.uProgress = 0;
         }
@@ -155,14 +153,15 @@ function LightboxScene({ startIndex, onClose }: { startIndex: number, onClose: (
   );
 }
 
-export default function MemoryWall3D() {
+export default function MemoryWall3D({ images }: { images?: string[] }) {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const displayImages = images && images.length > 0 ? images : FALLBACK_PHOTOS;
 
   return (
     <div className="relative">
       {/* HTML Masonry Grid */}
       <div className="columns-2 gap-4 space-y-4">
-        {PHOTOS.map((photo, i) => (
+        {displayImages.map((photo, i) => (
           <motion.div
             key={i}
             layoutId={`photo-${i}`}
@@ -187,25 +186,29 @@ export default function MemoryWall3D() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-charcoal"
+            className="fixed inset-0 z-50 bg-[#1A1A1A]"
           >
             <Canvas camera={{ position: [0, 0, 5], fov: 45 }}>
               <ambientLight intensity={1} />
-              <LightboxScene startIndex={selectedIndex} onClose={() => setSelectedIndex(null)} />
+              <LightboxScene 
+                startIndex={selectedIndex} 
+                onClose={() => setSelectedIndex(null)} 
+                photos={displayImages}
+              />
             </Canvas>
 
             <div className="absolute top-12 left-6 right-6 flex justify-between items-center pointer-events-none">
-              <h2 className="font-serif text-2xl text-linen">Memory</h2>
+              <h2 className="font-serif text-2xl text-[#EDE8DF]">Memory</h2>
               <button 
                 onClick={() => setSelectedIndex(null)}
-                className="pointer-events-auto text-linen/70 hover:text-linen w-10 h-10 flex items-center justify-center rounded-full bg-white/10 backdrop-blur-md"
+                className="pointer-events-auto text-[#EDE8DF]/70 hover:text-[#EDE8DF] w-10 h-10 flex items-center justify-center rounded-full bg-white/10 backdrop-blur-md"
               >
                 ✕
               </button>
             </div>
             
             <div className="absolute bottom-12 left-0 right-0 text-center pointer-events-none">
-              <p className="text-linen/70 text-sm tracking-widest uppercase">Tap to next</p>
+              <p className="text-[#EDE8DF]/70 text-sm tracking-widest uppercase font-outfit">Tap to next</p>
             </div>
           </motion.div>
         )}

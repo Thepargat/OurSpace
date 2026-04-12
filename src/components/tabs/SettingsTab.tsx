@@ -1,25 +1,27 @@
 import { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { 
+  Check, 
+  Camera, 
+  Loader2,
   ChevronLeft, 
   ChevronRight, 
   CalendarHeart, 
   Wallet, 
   ShoppingCart, 
   Calendar, 
-  Camera, 
-  DollarSign, 
-  CheckSquare, 
   Download, 
   Share2, 
   Shield, 
   FileText,
-  LogOut,
-  Check
+  Globe,
+  Link as LinkIcon 
 } from 'lucide-react';
-import { doc, updateDoc, onSnapshot, collection, query, where, getDocs, addDoc, limit, Timestamp } from 'firebase/firestore';
+import { doc, updateDoc, onSnapshot, collection, query, where, getDocs, addDoc, setDoc, Timestamp, deleteDoc } from 'firebase/firestore';
+import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { format } from 'date-fns';
-import { db, auth } from '../../firebase';
+import { db, auth, storage } from '../../firebase';
+import { updateProfile } from 'firebase/auth';
 import { useAuth } from '../AuthWrapper';
 import { NotificationPrefs } from '../../services/notificationService';
 import BottomSheet from '../ui/BottomSheet';
@@ -51,7 +53,7 @@ const SettingsRow = ({
       gap: "16px",
       padding: "0 20px",
       height: "56px",
-      background: "#F8F4EE",
+      background: "#fcf9f4",
       borderBottom: "1px solid #D4CEC4",
       cursor: "pointer"
     }}
@@ -114,10 +116,19 @@ const SectionLabel = ({ children }: { children: string }) => (
   </h3>
 );
 
+const ensureDate = (val: any): Date | null => {
+  if (!val) return null;
+  if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
+  if (typeof val.toDate === 'function') return val.toDate();
+  if (typeof val === 'object' && val.seconds !== undefined) return new Date(val.seconds * 1000);
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? null : d;
+};
+
 // --- Main Component ---
 
 export default function SettingsTab({ onBack }: { onBack: () => void }) {
-  const { user, userData, householdId } = useAuth();
+  const { user, userData, householdId, googleAccessToken, connectGoogleCalendar, clearGoogleToken } = useAuth();
   const [isEditingName, setIsEditingName] = useState(false);
   const [tempName, setTempName] = useState(userData?.displayName || user?.displayName || "");
   const [partner, setPartner] = useState<any>(null);
@@ -127,7 +138,12 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
   const [showBudgetSheet, setShowBudgetSheet] = useState(false);
   const [showSignOutSheet, setShowSignOutSheet] = useState(false);
   const [budgetLimit, setBudgetLimit] = useState("");
+  const [partnerEmail, setPartnerEmail] = useState("");
+  const [isSendingInvite, setIsSendingInvite] = useState(false);
+  const [inviteSent, setInviteSent] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Listen to household and partner
   useEffect(() => {
@@ -171,17 +187,27 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
       const q = query(
         collection(db, 'inviteCodes'),
         where('createdBy', '==', user.uid),
-        where('used', '==', false),
-        limit(1)
+        where('used', '==', false)
       );
       const snapshot = await getDocs(q);
       
-      if (!snapshot.empty) {
-        setInviteCode(snapshot.docs[0].data().code);
+      let validCode = null;
+      for (const d of snapshot.docs) {
+        const c = d.data().code;
+        if (/^\d{6}$/.test(c)) {
+          validCode = c;
+        } else {
+          // Delete old alphanumeric legacy codes
+          await deleteDoc(doc(db, 'inviteCodes', c));
+        }
+      }
+
+      if (validCode) {
+        setInviteCode(validCode);
       } else {
-        // Generate new 6-digit code
-        const newCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-        await addDoc(collection(db, 'inviteCodes'), {
+        // Generate new 6-digit number code
+        const newCode = Math.floor(100000 + Math.random() * 900000).toString();
+        await setDoc(doc(db, 'inviteCodes', newCode), {
           code: newCode,
           createdBy: user.uid,
           householdId: householdId,
@@ -242,6 +268,67 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
   };
 
+  const handleProfileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !user) return;
+    // Reset input so same file can be re-selected after error
+    if (fileInputRef.current) fileInputRef.current.value = '';
+
+    setIsUploading(true);
+    try {
+      const ext = file.name.split('.').pop() || 'jpg';
+      const storageRef = ref(storage, `users/${user.uid}/profile_${Date.now()}.${ext}`);
+
+      await new Promise<void>((resolve, reject) => {
+        const uploadTask = uploadBytesResumable(storageRef, file);
+        uploadTask.on(
+          'state_changed',
+          null,
+          (err) => reject(err),
+          () => resolve()
+        );
+      });
+
+      const downloadURL = await getDownloadURL(storageRef);
+
+      // Update Firestore first (AuthWrapper listens to this)
+      await updateDoc(doc(db, 'users', user.uid), { photoURL: downloadURL });
+
+      // Also update Firebase Auth profile
+      await updateProfile(user, { photoURL: downloadURL });
+
+      setIsUploading(false);
+    } catch (err: any) {
+      console.error('Profile photo upload error:', err);
+      setIsUploading(false);
+      const msg = err?.code === 'storage/unauthorized'
+        ? 'Permission denied. Paste this rule in Firebase Console → Storage → Rules:\n\nallow read, write: if request.auth != null;'
+        : err?.message || 'Upload failed. Check your connection and try again.';
+      alert(msg);
+    }
+  };
+
+  const sendEmailInvite = async () => {
+    if (!user || !partnerEmail || !householdId) return;
+    setIsSendingInvite(true);
+    try {
+      await addDoc(collection(db, 'emailInvites'), {
+        email: partnerEmail.toLowerCase().trim(),
+        fromUid: user.uid,
+        fromName: userData?.displayName || user.displayName || 'Your Partner',
+        householdId: householdId,
+        createdAt: Timestamp.now()
+      });
+      setInviteSent(true);
+      setPartnerEmail("");
+      setTimeout(() => setInviteSent(false), 3000);
+    } catch (error) {
+      console.error('Failed to send invite:', error);
+    } finally {
+      setIsSendingInvite(false);
+    }
+  };
+
   const handleSignOut = () => {
     auth.signOut();
   };
@@ -260,18 +347,18 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
   return (
     <div 
       style={{
-        height: "calc(100dvh - 80px)",
+        height: "calc(100dvh - 76px)",
         overflowY: "auto",
         overflowX: "hidden",
         WebkitOverflowScrolling: "touch",
         overscrollBehavior: "contain",
         paddingBottom: "calc(80px + env(safe-area-inset-bottom))",
-        background: "#F8F4EE"
+        background: "#fcf9f4"
       }}
       className="settings-container no-scrollbar"
     >
       {/* Header */}
-      <div className="px-6 pt-16 pb-6 flex items-center gap-4 sticky top-0 bg-[#F8F4EE] z-10">
+      <div className="px-6 pt-16 pb-6 flex items-center gap-4 sticky top-0 bg-[#fcf9f4] z-10">
         <button onClick={onBack} className="p-2 -ml-2 text-[#1A1A1A]">
           <ChevronLeft size={24} />
         </button>
@@ -286,16 +373,42 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
           transition={{ duration: 0.5, delay: 0 }}
           className="mb-8 p-6 bg-[#EDE8DF] rounded-[20px] border border-[#D4CEC4] flex flex-col items-center text-center"
         >
-          <div className="relative mb-4">
-            <div className="w-[72px] h-[72px] rounded-full border-[3px] border-[#F8F4EE] overflow-hidden relative z-10">
-              <img 
-                src={user?.photoURL || ''} 
-                alt="Profile" 
-                className="w-full h-full object-cover"
-                referrerPolicy="no-referrer"
-              />
+          <div className="relative mb-4 group">
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="w-[72px] h-[72px] rounded-full border-[3px] border-[#fcf9f4] overflow-hidden relative z-10 transition-transform group-active:scale-95 block"
+            >
+              {(userData?.photoURL || user?.photoURL) ? (
+                <img
+                  src={userData?.photoURL || user?.photoURL || ''}
+                  alt="Profile"
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="w-full h-full bg-[#B8955A] flex items-center justify-center font-serif text-2xl text-white">
+                  {(userData?.displayName || user?.displayName || 'U')[0].toUpperCase()}
+                </div>
+              )}
+              {isUploading && (
+                <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                  <Loader2 className="w-6 h-6 text-white animate-spin" />
+                </div>
+              )}
+            </button>
+
+            <div className="absolute bottom-0 right-0 w-7 h-7 bg-[#1A1A1A] rounded-full border-2 border-[#fcf9f4] z-20 flex items-center justify-center text-white shadow-lg pointer-events-none">
+              <Camera size={12} />
             </div>
-            <div className="absolute inset-[-5px] border-[2px] border-[#B8955A] rounded-full" />
+            <div className="absolute inset-[-5px] border-[2px] border-[#B8955A] rounded-full pointer-events-none" />
+
+            <input
+              type="file"
+              ref={fileInputRef}
+              className="hidden"
+              accept="image/*"
+              onChange={handleProfileUpload}
+            />
           </div>
 
           {isEditingName ? (
@@ -349,7 +462,7 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
                 />
               </div>
               <p className="font-outfit text-[13px] text-[#6B6560]">
-                Linked since {household?.createdAt ? format(new Date(household.createdAt), 'MMM d, yyyy') : '...'}
+                Linked since {ensureDate(household?.createdAt) ? format(ensureDate(household.createdAt)!, 'MMM d, yyyy') : '...'}
               </p>
             </div>
           </motion.div>
@@ -401,6 +514,25 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
                   </button>
                 </div>
 
+                <div className="mb-6 relative">
+                  <div className="flex items-center gap-2">
+                    <input 
+                      type="email"
+                      value={partnerEmail}
+                      onChange={(e) => setPartnerEmail(e.target.value)}
+                      placeholder="Or invite by email address..."
+                      className="flex-1 h-11 rounded-xl border border-[#D4CEC4] bg-white font-outfit text-[14px] text-[#1A1A1A] px-4 outline-none focus:border-[#B8955A]"
+                    />
+                    <button
+                      onClick={sendEmailInvite}
+                      disabled={!partnerEmail || isSendingInvite}
+                      className="h-11 px-4 rounded-xl bg-[#1A1A1A] font-outfit text-[14px] text-white flex items-center justify-center disabled:opacity-50"
+                    >
+                      {isSendingInvite ? '...' : inviteSent ? 'Sent!' : 'Send'}
+                    </button>
+                  </div>
+                </div>
+
                 <div className="flex items-center justify-center gap-2">
                   <motion.div 
                     animate={{ opacity: [1, 0.3, 1] }}
@@ -423,12 +555,12 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
           transition={{ duration: 0.5, delay: 0.24 }}
         >
           <SectionLabel>Important Dates</SectionLabel>
-          <div className="bg-[#F8F4EE] rounded-[16px] border border-[#D4CEC4] overflow-hidden">
+          <div className="bg-[#fcf9f4] rounded-[16px] border border-[#D4CEC4] overflow-hidden">
             <div className="relative">
               <SettingsRow 
                 icon={CalendarHeart}
                 label="Anniversary"
-                subtext={userData?.anniversary ? format(new Date(userData.anniversary), 'MMMM d, yyyy') : 'Set date'}
+                subtext={ensureDate(userData?.anniversary) ? format(ensureDate(userData.anniversary)!, 'MMMM d, yyyy') : 'Set date'}
               />
               <input 
                 type="date"
@@ -440,7 +572,7 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
               <SettingsRow 
                 icon={CalendarHeart}
                 label="Your birthday"
-                subtext={userData?.birthday ? format(new Date(userData.birthday), 'MMMM d, yyyy') : 'Set date'}
+                subtext={ensureDate(userData?.birthday) ? format(ensureDate(userData.birthday)!, 'MMMM d, yyyy') : 'Set date'}
               />
               <input 
                 type="date"
@@ -451,6 +583,51 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
           </div>
         </motion.div>
 
+        {/* Section: Integrations */}
+        <motion.div
+          initial={{ opacity: 0, y: 32, filter: "blur(4px)" }}
+          animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+          transition={{ duration: 0.5, delay: 0.28 }}
+        >
+          <SectionLabel>Integrations</SectionLabel>
+          <div className="bg-[#fcf9f4] rounded-[16px] border border-[#D4CEC4] overflow-hidden">
+            <SettingsRow 
+              icon={Globe}
+              label="Google Calendar"
+              subtext={userData?.calendarConnected ? (userData.calendarEmail || "Connected") : "Not linked"}
+              rightElement={
+                userData?.calendarConnected ? (
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); clearGoogleToken(); }}
+                    className="text-[12px] font-outfit font-medium text-[#C97B6A] px-3 py-1 bg-[#F5E6E0] rounded-full"
+                  >
+                    Disconnect
+                  </button>
+                ) : (
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); connectGoogleCalendar(); }}
+                    className="text-[12px] font-outfit font-medium text-[#B8955A] px-3 py-1 bg-[#EDE8DF] rounded-full"
+                  >
+                    Connect
+                  </button>
+                )
+              }
+              showChevron={false}
+            />
+            {partner && (
+              <SettingsRow 
+                icon={LinkIcon}
+                label={`${partner.displayName}'s Sync`}
+                subtext={partner.calendarConnected ? "Connected" : "Not connected"}
+                showChevron={false}
+                rightElement={
+                  <div className={`w-2 h-2 rounded-full ${partner.calendarConnected ? 'bg-[#7FAF7B]' : 'bg-[#D4CEC4]'}`} />
+                }
+              />
+            )}
+          </div>
+        </motion.div>
+
         {/* Section 4: Budget */}
         <motion.div
           initial={{ opacity: 0, y: 32, filter: "blur(4px)" }}
@@ -458,7 +635,7 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
           transition={{ duration: 0.5, delay: 0.32 }}
         >
           <SectionLabel>Finances</SectionLabel>
-          <div className="bg-[#F8F4EE] rounded-[16px] border border-[#D4CEC4] overflow-hidden">
+          <div className="bg-[#fcf9f4] rounded-[16px] border border-[#D4CEC4] overflow-hidden">
             <SettingsRow 
               icon={Wallet}
               label="Monthly Budget"
@@ -475,7 +652,7 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
           transition={{ duration: 0.5, delay: 0.4 }}
         >
           <SectionLabel>Notifications</SectionLabel>
-          <div className="bg-[#F8F4EE] rounded-[16px] border border-[#D4CEC4] overflow-hidden">
+          <div className="bg-[#fcf9f4] rounded-[16px] border border-[#D4CEC4] overflow-hidden">
             <SettingsRow 
               icon={ShoppingCart}
               label="Partner activity"
@@ -521,7 +698,7 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
           transition={{ duration: 0.5, delay: 0.48 }}
         >
           <SectionLabel>App</SectionLabel>
-          <div className="bg-[#F8F4EE] rounded-[16px] border border-[#D4CEC4] overflow-hidden">
+          <div className="bg-[#fcf9f4] rounded-[16px] border border-[#D4CEC4] overflow-hidden">
             <SettingsRow 
               icon={Download}
               label="Install on home screen"

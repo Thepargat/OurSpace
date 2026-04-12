@@ -22,7 +22,7 @@ export default function OnboardingStep1({ onNext }: OnboardingStep1Props) {
       transition={spring}
       style={{
         minHeight: "100dvh",
-        background: "#F8F4EE",
+        background: "#fcf9f4",
         display: "flex",
         flexDirection: "column",
         justifyContent: "space-between",

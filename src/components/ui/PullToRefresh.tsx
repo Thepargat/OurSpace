@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import { motion, useAnimation } from "motion/react";
 import { useDrag } from "@use-gesture/react";
 import { springs } from "../../lib/motion";

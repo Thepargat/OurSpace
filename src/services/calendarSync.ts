@@ -1,4 +1,4 @@
-import { doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs, Timestamp, deleteDoc, addDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs, deleteDoc, addDoc } from "firebase/firestore";
 import { db } from "../firebase";
 import { startOfMonth, endOfMonth, addDays, format, parseISO } from "date-fns";
 
@@ -6,7 +6,8 @@ const GOOGLE_CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3";
 
 export interface CalendarEvent {
   id?: string;
-  googleEventId?: string;
+  googleEventId?: string; // This is the ID in the OWNER's calendar
+  googleEventIds?: Record<string, string>; // Mapping of userId -> googleEventId for shared events
   title: string;
   startTime: string; // ISO string
   endTime: string; // ISO string
@@ -16,6 +17,7 @@ export interface CalendarEvent {
   createdBy: string;
   householdId: string;
   updatedAt: string;
+  isShared?: boolean;
 }
 
 const categoryColorMap: Record<string, string> = {
@@ -77,7 +79,7 @@ export async function syncGoogleCalendar(userId: string, householdId: string, ac
 
   const now = new Date();
   const timeMin = startOfMonth(now).toISOString();
-  const timeMax = endOfMonth(now).toISOString();
+  const timeMax = endOfMonth(addDays(now, 60)).toISOString(); // Sync 2 months ahead
 
   try {
     const response = await fetch(
@@ -96,47 +98,93 @@ export async function syncGoogleCalendar(userId: string, householdId: string, ac
           return syncGoogleCalendar(userId, householdId, refreshedToken);
         }
       }
-      const errorBody = await response.text();
-      throw new Error(`Google Calendar API error: ${response.status} - ${errorBody}`);
+      return;
     }
 
     const data = await response.json();
     const googleEvents = data.items || [];
+    const eventsRef = collection(db, "households", householdId, "events");
+
+    // Pre-load all existing OurSpace events for de-dup
+    const allExistingSnap = await getDocs(eventsRef);
+    const allExisting = allExistingSnap.docs.map(d => ({ id: d.id, ...d.data() } as any));
 
     for (const gEvent of googleEvents) {
-      const googleEventId = gEvent.id;
-      const eventsRef = collection(db, "households", householdId, "events");
-      const q = query(eventsRef, where("googleEventId", "==", googleEventId));
-      const querySnapshot = await getDocs(q);
+      // Skip cancelled/declined events
+      if (gEvent.status === 'cancelled') continue;
 
-      const eventData: CalendarEvent = {
-        googleEventId,
+      const gTitle  = (gEvent.summary || '').trim().toLowerCase();
+      const gDate   = (gEvent.start.dateTime || gEvent.start.date || '').substring(0, 10);
+      const ourSpaceId = gEvent.extendedProperties?.private?.ourspace_id;
+
+      // 1. Match by OurSpace ID embedded in the Google event
+      let existingEvent = ourSpaceId
+        ? allExisting.find((e: any) => e.id === ourSpaceId)
+        : null;
+
+      // 2. Match by googleEventIds map for this user
+      if (!existingEvent) {
+        existingEvent = allExisting.find(
+          (e: any) => e.googleEventIds?.[userId] === gEvent.id || e.googleEventId === gEvent.id
+        );
+      }
+
+      // 3. De-dup by title + date fingerprint (catches Google-native events already in Firestore)
+      if (!existingEvent) {
+        existingEvent = allExisting.find((e: any) => {
+          const eTitle = (e.title || '').trim().toLowerCase();
+          const eDate  = (e.startTime || '').substring(0, 10);
+          return eTitle === gTitle && eDate === gDate;
+        });
+      }
+
+      const eventData: Partial<CalendarEvent> = {
         title: gEvent.summary || "Untitled Event",
         startTime: gEvent.start.dateTime || gEvent.start.date,
         endTime: gEvent.end.dateTime || gEvent.end.date,
         notes: gEvent.description || "",
-        category: 'Personal',
-        source: 'google',
-        createdBy: userId,
-        householdId,
         updatedAt: new Date().toISOString(),
       };
 
-      if (querySnapshot.empty) {
-        await addDoc(eventsRef, eventData);
+      if (!existingEvent) {
+        // New event from Google
+        const newEvent: CalendarEvent = {
+          ...eventData as CalendarEvent,
+          googleEventId: gEvent.id,
+          googleEventIds: { [userId]: gEvent.id },
+          category: 'Personal',
+          source: 'google',
+          createdBy: userId,
+          householdId,
+          isShared: false
+        };
+        const newDocRef = await addDoc(eventsRef, newEvent);
+        // Add to local cache so subsequent loop iterations see it
+        allExisting.push({ id: newDocRef.id, ...newEvent });
       } else {
-        const existingDoc = querySnapshot.docs[0];
-        await updateDoc(existingDoc.ref, { ...eventData });
+        // Update if title or time changed, always stamp googleEventIds
+        const needsUpdate =
+          existingEvent.title !== eventData.title ||
+          existingEvent.startTime !== eventData.startTime ||
+          !existingEvent.googleEventIds?.[userId];
+
+        if (needsUpdate) {
+          await updateDoc(doc(db, "households", householdId, "events", existingEvent.id), {
+            ...eventData,
+            [`googleEventIds.${userId}`]: gEvent.id,
+          });
+        }
       }
     }
 
     await detectConflicts(householdId);
+
   } catch (error) {
     console.error("Sync error:", error);
   }
 }
 
-export async function pushToGoogleCalendar(event: CalendarEvent, accessToken: string, userId: string) {
+export async function pushToGoogleCalendar(event: CalendarEvent, accessToken: string, userId: string): Promise<string | null> {
   const validToken = await getValidToken(userId, accessToken);
   if (!validToken) return null;
 
@@ -146,11 +194,22 @@ export async function pushToGoogleCalendar(event: CalendarEvent, accessToken: st
     end: { dateTime: event.endTime },
     description: event.notes,
     colorId: categoryColorMap[event.category] || '1',
+    extendedProperties: {
+      private: {
+        ourspace_id: event.id || 'new_event',
+        created_by: event.createdBy
+      }
+    }
   };
 
   try {
-    const response = await fetch(`${GOOGLE_CALENDAR_API_BASE}/calendars/primary/events`, {
-      method: "POST",
+    const existingGoogleId = event.googleEventIds?.[userId] || event.googleEventId;
+    const url = existingGoogleId 
+      ? `${GOOGLE_CALENDAR_API_BASE}/calendars/primary/events/${existingGoogleId}`
+      : `${GOOGLE_CALENDAR_API_BASE}/calendars/primary/events`;
+    
+    const response = await fetch(url, {
+      method: existingGoogleId ? "PATCH" : "POST",
       headers: {
         Authorization: `Bearer ${validToken}`,
         "Content-Type": "application/json",
@@ -161,9 +220,7 @@ export async function pushToGoogleCalendar(event: CalendarEvent, accessToken: st
     if (!response.ok) {
       if (response.status === 401) {
         const refreshedToken = await refreshGoogleToken(userId);
-        if (refreshedToken) {
-          return pushToGoogleCalendar(event, refreshedToken, userId);
-        }
+        if (refreshedToken) return pushToGoogleCalendar(event, refreshedToken, userId);
       }
       return null;
     }
@@ -173,6 +230,33 @@ export async function pushToGoogleCalendar(event: CalendarEvent, accessToken: st
   } catch (error) {
     console.error("Push error:", error);
     return null;
+  }
+}
+
+/**
+ * Expert Sync: Pushes an event to BOTH partners if it's shared
+ */
+export async function syncEventToBothPartners(eventId: string, householdId: string) {
+  const eventSnap = await getDoc(doc(db, "households", householdId, "events", eventId));
+  if (!eventSnap.exists()) return;
+  
+  const event = { id: eventSnap.id, ...eventSnap.data() } as CalendarEvent;
+  if (!event.isShared) return;
+
+  const householdSnap = await getDoc(doc(db, "households", householdId));
+  const memberIds = householdSnap.data()?.memberIds || [];
+
+  for (const uid of memberIds) {
+    const tokenDoc = await getDoc(doc(db, "users", uid, "googleCalendarToken", "current"));
+    if (tokenDoc.exists()) {
+      const { accessToken } = tokenDoc.data();
+      const gId = await pushToGoogleCalendar(event, accessToken, uid);
+      if (gId) {
+        await updateDoc(doc(db, "households", householdId, "events", eventId), {
+          [`googleEventIds.${uid}`]: gId
+        });
+      }
+    }
   }
 }
 

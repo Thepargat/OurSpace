@@ -12,13 +12,13 @@ export default function SubScreen({ title, onBack }: SubScreenProps) {
     <PageTransition>
       <div 
         style={{
-          height: 'calc(100dvh - 80px)',
+          height: 'calc(100dvh - 76px)',
           overflowY: 'auto',
           overflowX: 'hidden',
           WebkitOverflowScrolling: 'touch',
           overscrollBehavior: 'contain',
           paddingBottom: 'calc(32px + env(safe-area-inset-bottom))',
-          background: '#F8F4EE'
+          background: '#fcf9f4'
         }}
         className="flex flex-col px-6 pt-16 no-scrollbar"
       >

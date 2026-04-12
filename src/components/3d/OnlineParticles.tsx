@@ -1,4 +1,4 @@
-import { useRef, useMemo } from 'react';
+import { useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 
@@ -7,27 +7,27 @@ interface OnlineParticlesProps {
   bothOnline?: boolean;
 }
 
+const PARTICLE_INITIAL_DATA = (() => {
+  const pos = new Float32Array(300 * 3);
+  const spd = new Float32Array(300);
+  const phs = new Float32Array(300);
+  
+  for (let i = 0; i < 300; i++) {
+    pos[i * 3] = (Math.random() - 0.5) * 10;
+    pos[i * 3 + 1] = (Math.random() - 0.5) * 10;
+    pos[i * 3 + 2] = (Math.random() - 0.5) * 4;
+    spd[i] = 0.2 + Math.random() * 0.5;
+    phs[i] = Math.random() * Math.PI * 2;
+  }
+  return { pos, spd, phs };
+})();
+
 function ParticleField({ isAnniversary, bothOnline }: OnlineParticlesProps) {
   const pointsRef = useRef<THREE.Points>(null);
   
   const particleCount = isAnniversary ? 300 : (bothOnline ? 100 : 0);
   
-  const [positions, speeds, phases] = useMemo(() => {
-    const pos = new Float32Array(300 * 3);
-    const spd = new Float32Array(300);
-    const phs = new Float32Array(300);
-    
-    for (let i = 0; i < 300; i++) {
-      // x: -5 to 5, y: -5 to 5, z: -2 to 2
-      pos[i * 3] = (Math.random() - 0.5) * 10;
-      pos[i * 3 + 1] = (Math.random() - 0.5) * 10;
-      pos[i * 3 + 2] = (Math.random() - 0.5) * 4;
-      
-      spd[i] = 0.2 + Math.random() * 0.5;
-      phs[i] = Math.random() * Math.PI * 2;
-    }
-    return [pos, spd, phs];
-  }, []);
+  const { pos: positions, spd: speeds, phs: phases } = PARTICLE_INITIAL_DATA;
 
   useFrame((state, delta) => {
     if (!pointsRef.current || particleCount === 0) return;

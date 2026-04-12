@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { Plus, X, Trash2, ChevronLeft, ChevronRight, Camera, Loader2 } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Plus, X, ChevronLeft, ChevronRight, Loader2, Camera, Image as ImageIcon, Trash2 } from 'lucide-react';
 import { 
   collection, 
   query, 
@@ -25,12 +25,22 @@ import BlurImage from '../ui/BlurImage';
 import BottomSheet from '../ui/BottomSheet';
 import { format } from 'date-fns';
 import { notifyPartner } from '../../services/notificationService';
+import MemoryWall3D from '../3d/MemoryWall3D';
 
 const normalizeDate = (date: any): Date => {
   if (!date) return new Date();
   if (typeof date === 'string') return new Date(date);
   if (date && typeof date.toDate === 'function') return date.toDate();
   return new Date(date);
+};
+
+const ensureDate = (val: any): Date | null => {
+  if (!val) return null;
+  if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
+  if (typeof val.toDate === 'function') return val.toDate();
+  if (typeof val === 'object' && val.seconds !== undefined) return new Date(val.seconds * 1000);
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? null : d;
 };
 
 interface Memory {
@@ -41,6 +51,7 @@ interface Memory {
   uploadedBy: string;
   uploaderName?: string;
   uploaderPhoto?: string;
+  storagePath?: string;
 }
 
 export default function MemoryWall() {
@@ -52,6 +63,11 @@ export default function MemoryWall() {
   const [currentUploadId, setCurrentUploadId] = useState<string | null>(null);
   const [caption, setCaption] = useState('');
   const [selectedMemoryIndex, setSelectedMemoryIndex] = useState<number | null>(null);
+  const [viewMode, setViewMode] = useState<'grid' | 'immersive'>('grid');
+  const [isSelectionSheetOpen, setIsSelectionSheetOpen] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Real-time listener
@@ -75,69 +91,83 @@ export default function MemoryWall() {
     return () => unsubscribe();
   }, [householdId]);
 
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !householdId || !user) return;
+    if (!file) return;
 
-    const timestamp = Date.now();
-    const filename = `${timestamp}_${file.name}`;
-    const storageRef = ref(storage, `households/${householdId}/memories/${filename}`);
-    
-    const uploadTask = uploadBytesResumable(storageRef, file);
-
-    uploadTask.on('state_changed', 
-      (snapshot) => {
-        const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-        setUploadProgress(progress);
-      }, 
-      (error) => {
-        console.error("Upload error:", error);
-        setUploadProgress(null);
-      }, 
-      async () => {
-        const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-        
-        // Create initial doc
-        const docRef = await addDoc(collection(db, 'households', householdId, 'memories'), {
-          imageURL: downloadURL,
-          date: serverTimestamp(),
-          uploadedBy: user.uid,
-          uploaderName: userData?.displayName || user.displayName || 'Partner',
-          uploaderPhoto: userData?.photoURL || user.photoURL || '',
-          storagePath: `households/${householdId}/memories/${filename}` // Store for deletion
-        });
-
-        // Trigger Notification
-        notifyPartner(
-          householdId,
-          user.uid,
-          "Memory Wall",
-          `${userData?.displayName || user.displayName || 'Partner'} added a new memory ❤️`,
-          "memories"
-        );
-
-        setCurrentUploadId(docRef.id);
-        setUploadProgress(null);
-        setIsCaptionSheetOpen(true);
-        if (fileInputRef.current) fileInputRef.current.value = '';
-      }
-    );
+    setSelectedFile(file);
+    const url = URL.createObjectURL(file);
+    setPreviewUrl(url);
+    setIsSelectionSheetOpen(false);
+    setIsCaptionSheetOpen(true);
   };
 
-  const saveCaption = async () => {
-    if (!currentUploadId || !householdId) return;
+  const saveMemory = async () => {
+    if (!selectedFile || !householdId || !user) return;
+    if (isSaving) return;
+
+    setIsSaving(true);
+    setUploadProgress(0);
 
     try {
-      const memoryRef = doc(db, 'households', householdId, 'memories', currentUploadId);
-      await updateDoc(memoryRef, { caption });
-      
+      const timestamp = Date.now();
+      const ext = selectedFile.name.split('.').pop() || 'jpg';
+      const filename = `${timestamp}.${ext}`;
+      const storagePath = `households/${householdId}/memories/${filename}`;
+      const storageRef = ref(storage, storagePath);
+
+      // Upload with progress tracking
+      await new Promise<void>((resolve, reject) => {
+        const uploadTask = uploadBytesResumable(storageRef, selectedFile);
+        uploadTask.on(
+          'state_changed',
+          (snap) => {
+            setUploadProgress((snap.bytesTransferred / snap.totalBytes) * 100);
+          },
+          (err) => reject(err),
+          () => resolve()
+        );
+      });
+
+      const downloadURL = await getDownloadURL(storageRef);
+
+      await addDoc(collection(db, 'households', householdId, 'memories'), {
+        imageURL: downloadURL,
+        caption: caption.trim(),
+        date: serverTimestamp(),
+        uploadedBy: user.uid,
+        uploaderName: userData?.displayName || user.displayName || 'Partner',
+        uploaderPhoto: userData?.photoURL || user.photoURL || '',
+        storagePath,
+      });
+
+      notifyPartner(
+        householdId,
+        user.uid,
+        'Memory Wall',
+        `${userData?.displayName || user.displayName || 'Partner'} added a new memory ❤️`,
+        'memories'
+      );
+
+      // Reset state
+      setUploadProgress(null);
+      setIsSaving(false);
       setIsCaptionSheetOpen(false);
       setCaption('');
-      setCurrentUploadId(null);
-    } catch (error) {
-      console.error("Error saving caption:", error);
+      setSelectedFile(null);
+      setPreviewUrl(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } catch (error: any) {
+      console.error('Memory save error:', error);
+      setUploadProgress(null);
+      setIsSaving(false);
+      const msg = error?.code === 'storage/unauthorized'
+        ? 'Storage permission denied. Please check Firebase Storage rules (see below).'
+        : error?.message || 'Upload failed. Check your connection.';
+      alert(msg);
     }
   };
+
 
   const deleteMemory = async (memory: Memory) => {
     if (!householdId || user?.uid !== memory.uploadedBy) return;
@@ -182,6 +212,30 @@ export default function MemoryWall() {
         )}
       </AnimatePresence>
 
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="font-serif text-2xl text-[#1A1A1A]">
+          {viewMode === 'grid' ? 'Moments' : 'Immersive'}
+        </h2>
+        <div className="flex bg-[#EDE8DF] p-1 rounded-full border border-[#D4CEC4]">
+          <button 
+            onClick={() => setViewMode('grid')}
+            className={`px-4 py-1.5 rounded-full font-outfit text-xs font-medium transition-all ${
+              viewMode === 'grid' ? 'bg-[#1A1A1A] text-white shadow-sm' : 'text-[#6B6560]'
+            }`}
+          >
+            Grid
+          </button>
+          <button 
+            onClick={() => setViewMode('immersive')}
+            className={`px-4 py-1.5 rounded-full font-outfit text-xs font-medium transition-all ${
+              viewMode === 'immersive' ? 'bg-[#1A1A1A] text-white shadow-sm' : 'text-[#6B6560]'
+            }`}
+          >
+            3D
+          </button>
+        </div>
+      </div>
+
       {memories.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-32 text-center px-6">
           <motion.div
@@ -194,46 +248,120 @@ export default function MemoryWall() {
           </motion.div>
         </div>
       ) : (
-        <div className="columns-2 gap-4 space-y-4 pb-32">
-          {memories.map((memory, index) => (
-            <motion.div
-              key={memory.id}
-              initial={{ scale: 0, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ type: "spring", stiffness: 300, damping: 25 }}
-              className="relative break-inside-avoid group"
-              onClick={() => setSelectedMemoryIndex(index)}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                deleteMemory(memory);
-              }}
+        <AnimatePresence mode="wait">
+          {viewMode === 'grid' ? (
+            <motion.div 
+              key="grid"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="columns-2 gap-4 space-y-4 pb-32"
             >
-              <div className="rounded-2xl overflow-hidden bg-[#EDE8DF]">
-                <BlurImage 
-                  src={memory.imageURL} 
-                  alt={memory.caption || "Memory"} 
-                  className="w-full h-auto"
-                />
-              </div>
-              <div className="mt-2 px-1">
-                <p className="font-outfit text-[12px] text-[#6B6560] flex items-center gap-1.5">
-                  <span className="font-medium text-[#1A1A1A]">{memory.uploaderName}</span>
-                  <span className="opacity-40">•</span>
-                  <span>{memory.date ? format(normalizeDate(memory.date), 'MMM d, yyyy') : 'Just now'}</span>
-                </p>
-                {memory.caption && (
-                  <p className="font-outfit text-sm text-[#1A1A1A] mt-1 line-clamp-2">{memory.caption}</p>
-                )}
-              </div>
+              {memories.map((memory, index) => (
+                <motion.div
+                  key={memory.id}
+                  initial={{ scale: 0, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={{ type: "spring", stiffness: 300, damping: 25 }}
+                  className="relative break-inside-avoid group"
+                  onClick={() => setSelectedMemoryIndex(index)}
+                >
+                  <div className="rounded-2xl overflow-hidden bg-[#EDE8DF]">
+                    <BlurImage 
+                      src={memory.imageURL} 
+                      alt={memory.caption || "Memory"} 
+                      className="w-full h-auto"
+                    />
+                  </div>
+
+                  {/* Delete Button (Grid) */}
+                  {user?.uid === memory.uploadedBy && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteMemory(memory);
+                      }}
+                      className="absolute top-2 right-2 w-8 h-8 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+
+                  <div className="mt-2 px-1">
+                    <p className="font-outfit text-[12px] text-[#6B6560] flex items-center gap-1.5">
+                      <span className="font-medium text-[#1A1A1A]">{memory.uploaderName}</span>
+                      <span className="opacity-40">•</span>
+                      <span>{memory.date ? format(ensureDate(memory.date)!, 'MMM d, yyyy') : 'Just now'}</span>
+                    </p>
+                    {memory.caption && (
+                      <p className="font-outfit text-sm text-[#1A1A1A] mt-1 line-clamp-2">{memory.caption}</p>
+                    )}
+                  </div>
+                </motion.div>
+              ))}
             </motion.div>
-          ))}
-        </div>
+          ) : (
+            <motion.div
+              key="immersive"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="pb-32"
+            >
+              <MemoryWall3D images={memories.map(m => m.imageURL)} />
+            </motion.div>
+          )}
+        </AnimatePresence>
       )}
+
+      {/* Selection Sheet */}
+      <BottomSheet 
+        isOpen={isSelectionSheetOpen} 
+        onClose={() => setIsSelectionSheetOpen(false)}
+      >
+        <div className="py-4 space-y-2 pb-8">
+          <h3 className="font-serif text-xl text-[#1A1A1A] mb-4">Choose Photo</h3>
+          <button 
+            onClick={() => {
+              if (fileInputRef.current) {
+                fileInputRef.current.setAttribute('capture', 'environment');
+                fileInputRef.current.click();
+              }
+            }}
+            className="w-full flex items-center gap-4 p-4 rounded-2xl bg-[#EDE8DF] border border-[#D4CEC4] active:scale-[0.98] transition-all"
+          >
+            <div className="w-10 h-10 rounded-full bg-[#1A1A1A] flex items-center justify-center text-white">
+              <Camera size={20} />
+            </div>
+            <div className="text-left">
+              <p className="font-outfit font-medium text-[#1A1A1A]">Take Photo</p>
+              <p className="font-outfit text-xs text-[#6B6560]">Use your camera</p>
+            </div>
+          </button>
+          <button 
+            onClick={() => {
+              if (fileInputRef.current) {
+                fileInputRef.current.removeAttribute('capture');
+                fileInputRef.current.click();
+              }
+            }}
+            className="w-full flex items-center gap-4 p-4 rounded-2xl bg-[#EDE8DF] border border-[#D4CEC4] active:scale-[0.98] transition-all"
+          >
+            <div className="w-10 h-10 rounded-full bg-[#B8955A] flex items-center justify-center text-white">
+              <ImageIcon size={20} />
+            </div>
+            <div className="text-left">
+              <p className="font-outfit font-medium text-[#1A1A1A]">Photo Library</p>
+              <p className="font-outfit text-xs text-[#6B6560]">Choose from your phone</p>
+            </div>
+          </button>
+        </div>
+      </BottomSheet>
 
       {/* FAB */}
       <motion.button
         whileTap={{ scale: 0.92 }}
-        onClick={() => fileInputRef.current?.click()}
+        onClick={() => setIsSelectionSheetOpen(true)}
         className="fixed bottom-[100px] right-6 w-14 h-14 bg-[#1A1A1A] text-white rounded-full flex items-center justify-center shadow-lg z-50"
       >
         <Plus size={28} />
@@ -244,30 +372,39 @@ export default function MemoryWall() {
         ref={fileInputRef}
         className="hidden"
         accept="image/*"
-        capture="environment"
         onChange={handleFileSelect}
       />
 
       {/* Caption Sheet */}
       <BottomSheet 
         isOpen={isCaptionSheetOpen} 
-        onClose={() => setIsCaptionSheetOpen(false)}
+        onClose={() => {
+          setIsCaptionSheetOpen(false);
+          setSelectedFile(null);
+          setPreviewUrl(null);
+        }}
         footer={
           <button
-            onClick={saveCaption}
-            className="w-full h-14 bg-[#1A1A1A] text-white rounded-full font-outfit font-medium text-lg shadow-lg"
+            onClick={saveMemory}
+            disabled={isSaving}
+            className="w-full h-14 bg-[#1A1A1A] text-white rounded-full font-outfit font-medium text-lg shadow-lg disabled:opacity-50 flex items-center justify-center gap-2"
           >
-            Save Memory ✦
+            {isSaving ? <Loader2 className="animate-spin" size={20} /> : 'Save Memory ✦'}
           </button>
         }
       >
-        <div className="py-4">
+        <div className="py-2">
+          {previewUrl && (
+            <div className="w-full aspect-square rounded-2xl overflow-hidden mb-6 bg-[#EDE8DF] border border-[#D4CEC4]">
+              <img src={previewUrl} className="w-full h-full object-cover" alt="Preview" />
+            </div>
+          )}
           <textarea
             autoFocus
             placeholder="Add a caption..."
             value={caption}
             onChange={(e) => setCaption(e.target.value)}
-            className="w-full bg-transparent border-none focus:ring-0 font-serif text-[20px] text-[#1A1A1A] placeholder-[#6B6560]/40 resize-none min-h-[120px]"
+            className="w-full bg-transparent border-none focus:ring-0 font-serif text-[20px] text-[#1A1A1A] placeholder-[#6B6560]/40 resize-none min-h-[80px]"
           />
         </div>
       </BottomSheet>
@@ -279,6 +416,10 @@ export default function MemoryWall() {
             memories={memories} 
             initialIndex={selectedMemoryIndex} 
             onClose={() => setSelectedMemoryIndex(null)} 
+            onDelete={async (memory) => {
+              await deleteMemory(memory);
+              setSelectedMemoryIndex(null);
+            }}
           />
         )}
       </AnimatePresence>
@@ -286,7 +427,8 @@ export default function MemoryWall() {
   );
 }
 
-function Lightbox({ memories, initialIndex, onClose }: { memories: Memory[], initialIndex: number, onClose: () => void }) {
+function Lightbox({ memories, initialIndex, onClose, onDelete }: { memories: Memory[], initialIndex: number, onClose: () => void, onDelete: (m: Memory) => void }) {
+  const { user } = useAuth();
   const [index, setIndex] = useState(initialIndex);
 
   const next = () => setIndex((prev) => (prev + 1) % memories.length);
@@ -316,6 +458,19 @@ function Lightbox({ memories, initialIndex, onClose }: { memories: Memory[], ini
           <X size={20} />
         </button>
       </div>
+
+      {/* Delete (Lightbox) */}
+      {user?.uid === memories[index].uploadedBy && (
+        <button 
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(memories[index]);
+          }}
+          className="absolute top-6 right-20 w-10 h-10 rounded-full bg-red-500/20 flex items-center justify-center text-red-500 hover:bg-red-500/40 transition-all z-20"
+        >
+          <Trash2 size={20} />
+        </button>
+      )}
 
       {/* Image Container */}
       <div className="flex-1 relative flex items-center justify-center p-4">

@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState } from "react";
 import { auth, db } from "../firebase";
 import { signInWithPopup, onAuthStateChanged, User, GoogleAuthProvider } from "firebase/auth";
 import { doc, getDoc, updateDoc, deleteDoc, setDoc, onSnapshot } from "firebase/firestore";
-import { motion } from "motion/react";
+import { motion } from "framer-motion";
 
 enum OperationType {
   CREATE = 'create',
@@ -93,7 +93,9 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
     if (!authState.user) return false;
     
     const provider = new GoogleAuthProvider();
-    provider.addScope('https://www.googleapis.com/auth/calendar');
+    provider.addScope('https://www.googleapis.com/auth/calendar.events');
+    provider.addScope('https://www.googleapis.com/auth/calendar.readonly');
+    
     // Request offline access to get a refresh token
     provider.setCustomParameters({
       access_type: 'offline',
@@ -102,33 +104,42 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
     
     try {
       const result = await signInWithPopup(auth, provider);
+      
+      // The credential only contains the short-lived accessToken
       const credential = GoogleAuthProvider.credentialFromResult(result);
       const accessToken = credential?.accessToken;
-      // Note: Firebase signInWithPopup might not return the refreshToken directly in the credential
-      // for some configurations. However, we will store what we get.
-      // If it's missing, we'll rely on the user re-authenticating once, but we'll set up the structure.
+      
+      // The refreshToken is found in the _tokenResponse for signInWithPopup
+      // when access_type=offline and prompt=consent are used
+      const tokenResponse = (result as any)._tokenResponse;
+      const refreshToken = tokenResponse?.refreshToken;
       
       if (accessToken) {
-        const tokenData = {
+        const tokenData: any = {
           accessToken,
-          refreshToken: (result as { _tokenResponse?: { refreshToken?: string } })._tokenResponse?.refreshToken || null,
-          expiresAt: Date.now() + 3600 * 1000, // Google tokens usually last 1h
+          expiresAt: Date.now() + 3500 * 1000, // 3500 to be safe (Google is 3600)
           updatedAt: new Date().toISOString()
         };
 
-        // Store in Firestore as requested
-        await setDoc(doc(db, "users", authState.user.uid, "googleCalendarToken", "current"), tokenData);
+        // ONLY update refreshToken if it's present (usually only on first consent)
+        if (refreshToken) {
+          tokenData.refreshToken = refreshToken;
+        }
+
+        // Store in Firestore
+        await setDoc(doc(db, "users", authState.user.uid, "googleCalendarToken", "current"), tokenData, { merge: true });
         
         // Update user document
         await updateDoc(doc(db, "users", authState.user.uid), {
           calendarConnected: true,
+          calendarEmail: result.user.email,
           updatedAt: new Date().toISOString()
         });
         
         setAuthState(prev => ({
           ...prev,
           googleAccessToken: accessToken,
-          userData: { ...prev.userData, calendarConnected: true }
+          userData: { ...prev.userData, calendarConnected: true, calendarEmail: result.user.email }
         }));
         
         return true;
@@ -173,9 +184,16 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
             const householdId = userData?.householdId || null;
             const hasHousehold = !!householdId;
 
-            // Fetch token from Firestore (one-time fetch is fine here, or we could listen too)
-            const tokenDoc = await getDoc(doc(db, "users", currentUser.uid, "googleCalendarToken", "current"));
-            const googleAccessToken = tokenDoc.exists() ? tokenDoc.data().accessToken : null;
+            // Fetch token from Firestore
+            let googleAccessToken = null;
+            try {
+              const tokenDoc = await getDoc(doc(db, "users", currentUser.uid, "googleCalendarToken", "current"));
+              if (tokenDoc.exists()) {
+                googleAccessToken = tokenDoc.data().accessToken;
+              }
+            } catch (err) {
+              console.warn("Failed to fetch Google Calendar token:", err);
+            }
 
             setAuthState(prev => ({
               ...prev,
@@ -248,7 +266,7 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
 
   if (authState.loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#F8F4EE]">
+      <div className="flex min-h-screen items-center justify-center bg-[#fcf9f4]">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#D4CEC4] border-t-[#B8955A]" />
       </div>
     );
@@ -261,7 +279,7 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
       <div 
         style={{
           minHeight: "100dvh",
-          background: "#F8F4EE",
+          background: "#fcf9f4",
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
@@ -278,7 +296,7 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
             inset: 0,
             opacity: 0.03,
             pointerEvents: "none",
-            backgroundImage: `url('https://grainy-gradients.vercel.app/noise.svg')`,
+            backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
             zIndex: 1
           }}
         />

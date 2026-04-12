@@ -1,26 +1,21 @@
-import { useState, useEffect } from "react";
+// Design System Overhaul - Force Reload 2
+import { useState, useEffect, useRef } from "react";
 import Lenis from 'lenis';
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion } from "framer-motion";
 import { useDrag } from "@use-gesture/react";
 import { X } from "lucide-react";
-import { doc, setDoc, onSnapshot, getDocs, updateDoc, collection, query, where, Timestamp } from "firebase/firestore";
+import { doc, onSnapshot, getDocs, updateDoc, collection, query, where, Timestamp, arrayRemove, arrayUnion, deleteDoc } from "firebase/firestore";
 import { db, auth } from "./firebase";
 import AuthWrapper, { useAuth } from "./components/AuthWrapper";
 import { requestNotificationPermission, onForegroundMessage, notifyPartner, updateFCMToken } from "./services/notificationService";
-import { format, addMinutes, isBefore, isAfter, parseISO } from "date-fns";
+import { startPresenceTracking } from "./services/presenceService";
+import { addMinutes } from "date-fns";
 import NoiseOverlay from "./components/NoiseOverlay";
 import BottomNav from "./components/BottomNav";
 import Toast from "./components/ui/Toast";
-import PageTransition from "./components/ui/PageTransition";
 import ProgressBar from "./components/ui/ProgressBar";
-import ReorderableList, { ReorderItemData } from "./components/ui/ReorderableList";
-import SwipeableItem from "./components/ui/SwipeableItem";
-import BottomSheet from "./components/ui/BottomSheet";
-import AnimatedButton from "./components/ui/AnimatedButton";
 import LaunchScreen from "./components/ui/LaunchScreen";
 import OnlineParticles from "./components/3d/OnlineParticles";
-import GroceryItem from "./components/ui/GroceryItem";
-import { staggerContainer, staggerItem } from "./lib/motion";
 import HomeTab from "./components/tabs/HomeTab";
 
 import CalendarTab from "./components/tabs/CalendarTab";
@@ -34,6 +29,9 @@ import ChoresTab from "./components/tabs/ChoresTab";
 import SettingsTab from "./components/tabs/SettingsTab";
 import MoodHistoryTab from "./components/tabs/MoodHistoryTab";
 import SubScreen from "./components/ui/SubScreen";
+import SubscriptionsScreen from "./components/screens/SubscriptionsScreen";
+import HomeCarScreen from "./components/screens/HomeCarScreen";
+import ActivityFeedScreen from "./components/screens/ActivityFeedScreen";
 import OnboardingStep1 from "./components/onboarding/OnboardingStep1";
 import OnboardingStep2 from "./components/onboarding/OnboardingStep2";
 import OnboardingStep3 from "./components/onboarding/OnboardingStep3";
@@ -52,13 +50,29 @@ function MainApp() {
   const [toastMsg, setToastMsg] = useState("");
   const [toastType, setToastType] = useState<'online' | 'offline'>('offline');
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [pendingInvite, setPendingInvite] = useState<any>(null);
+  const [isAcceptingInvite, setIsAcceptingInvite] = useState(false);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [isFirstLoadOffline, setIsFirstLoadOffline] = useState(!navigator.onLine && !localStorage.getItem('ourspace_cached'));
   const [showNotificationCard, setShowNotificationCard] = useState(false);
   const [inAppNotification, setInAppNotification] = useState<{ title: string, body: string, data?: any } | null>(null);
   const [showIOSInstall, setShowIOSInstall] = useState(false);
 
-  // Session Tracking
+  // Directional tab slide tracking
+  const TAB_ORDER = ['home', 'calendar', 'mood', 'finances', 'more'];
+  const prevTabRef = useRef('home');
+  const tabDirectionRef = useRef(0); // -1 = slide right (going back), 1 = slide left (going forward)
+
+  const handleTabChange = (tab: string) => {
+    const prevIdx = TAB_ORDER.indexOf(prevTabRef.current);
+    const nextIdx = TAB_ORDER.indexOf(tab);
+    tabDirectionRef.current = nextIdx > prevIdx ? 1 : -1;
+    prevTabRef.current = tab;
+    setSubScreen(null);
+    setActiveTab(tab);
+  };
+
+  // Session Tracking & Presence
   useEffect(() => {
     const sessions = parseInt(localStorage.getItem('ourspace_sessions') || '0');
     const newSessions = sessions + 1;
@@ -67,6 +81,14 @@ function MainApp() {
     if (user) {
       updateFCMToken(user.uid);
     }
+  }, [user]);
+
+  // Presence tracking — mark user as online/offline in Firestore
+  useEffect(() => {
+    if (!user) return;
+    let cleanup: (() => void) | undefined;
+    startPresenceTracking(user.uid).then(fn => { cleanup = fn; });
+    return () => { cleanup?.(); };
   }, [user]);
 
   useEffect(() => {
@@ -172,6 +194,52 @@ function MainApp() {
       }
     });
   }, []);
+
+  // --- Email Invites Listener ---
+  useEffect(() => {
+    if (!user?.email) return;
+    const q = query(collection(db, 'emailInvites'), where('email', '==', user.email.toLowerCase()));
+    const unsub = onSnapshot(q, (snapshot) => {
+      if (!snapshot.empty) {
+        setPendingInvite({ id: snapshot.docs[0].id, ...snapshot.docs[0].data() });
+      } else {
+        setPendingInvite(null);
+      }
+    });
+    return unsub;
+  }, [user]);
+
+  const handleAcceptInvite = async () => {
+    if (!user || !pendingInvite) return;
+    setIsAcceptingInvite(true);
+    try {
+      if (householdId) {
+        // Leave old household
+        await updateDoc(doc(db, "households", householdId), {
+          memberIds: arrayRemove(user.uid)
+        });
+      }
+      
+      // Join new household
+      await updateDoc(doc(db, "households", pendingInvite.householdId), {
+        memberIds: arrayUnion(user.uid)
+      });
+      
+      // Link Profile
+      await updateDoc(doc(db, "users", user.uid), {
+        householdId: pendingInvite.householdId,
+        partnerId: pendingInvite.fromUid
+      });
+      
+      // Delete invite
+      await deleteDoc(doc(db, "emailInvites", pendingInvite.id));
+      setPendingInvite(null);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsAcceptingInvite(false);
+    }
+  };
 
   // Event Reminder Checker
   useEffect(() => {
@@ -346,7 +414,7 @@ function MainApp() {
   }, [activeTab, showLaunchScreen]);
 
   useEffect(() => {
-    const themeColor = activeTab === 'home' ? '#F8F4EE' : '#F8F4EE'; // Could vary by tab
+    const themeColor = activeTab === 'home' ? '#fcf9f4' : '#fcf9f4'; // Could vary by tab
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', themeColor);
   }, [activeTab]);
 
@@ -360,17 +428,30 @@ function MainApp() {
         case 'savings': return <SubScreen key="savings" title="Savings Goals" onBack={() => setSubScreen(null)} />;
         case 'mood-history': return <MoodHistoryTab key="mood-history" onBack={() => setSubScreen(null)} />;
         case 'settings': return <SettingsTab key="settings" onBack={() => setSubScreen(null)} />;
+        case 'subscriptions': return <SubscriptionsScreen key="subscriptions" onBack={() => setSubScreen(null)} />;
+        case 'home-car': return <HomeCarScreen key="home-car" onBack={() => setSubScreen(null)} />;
+        case 'activity': return <ActivityFeedScreen key="activity" onBack={() => setSubScreen(null)} />;
         default: return null;
       }
     }
 
+    // Support DashboardHome navigating to specific sub-screens
+    const handleDashboardNavigate = (target: string) => {
+      const subScreenTargets = ['grocery', 'meal-planner', 'chores', 'notes', 'savings', 'mood-history', 'settings', 'subscriptions', 'home-car', 'activity', 'together'];
+      if (subScreenTargets.includes(target)) {
+        setSubScreen(target);
+      } else {
+        setActiveTab(target);
+      }
+    };
+
     switch (activeTab) {
-      case "home": return <HomeTab key="home" isAnniversary={isAnniversary} onNavigate={setActiveTab} />;
+      case "home": return <HomeTab key="home" isAnniversary={isAnniversary} onNavigate={handleDashboardNavigate} />;
       case "calendar": return <CalendarTab key="calendar" />;
       case "finances": return <FinancesTab key="finances" />;
-      case "together": return <TogetherTab key="together" />;
+      case "mood": return <MoodHistoryTab key="mood" onBack={() => setActiveTab('home')} />;
       case "more": return <MoreTab key="more" onNavigate={setSubScreen} />;
-      default: return <HomeTab key="home" isAnniversary={isAnniversary} onNavigate={setActiveTab} />;
+      default: return <HomeTab key="home" isAnniversary={isAnniversary} onNavigate={handleDashboardNavigate} />;
     }
   };
 
@@ -401,7 +482,7 @@ function MainApp() {
   return (
     <>
       {isFirstLoadOffline && (
-        <div className="fixed inset-0 z-[20000] bg-[#F8F4EE] flex flex-col items-center justify-center text-center px-8">
+        <div className="fixed inset-0 z-[20000] bg-[#fcf9f4] flex flex-col items-center justify-center text-center px-8">
           <div className="w-20 h-20 bg-[#B8955A] rounded-[24px] flex items-center justify-center mb-8 shadow-xl">
             <span className="font-serif text-white text-3xl font-bold">OS</span>
           </div>
@@ -557,24 +638,40 @@ function MainApp() {
       <NoiseOverlay />
       <OnlineParticles isAnniversary={isAnniversary} bothOnline={true} />
       <ProgressBar isLoading={isLoading} />
-      <div style={{ height: '100dvh', display: 'flex', flexDirection: 'column', background: '#F8F4EE' }} className="relative w-full">
-        <AnimatePresence mode="wait">
+      <div style={{ height: '100dvh', display: 'flex', flexDirection: 'column', background: '#fcf9f4' }} className="relative w-full">
+        <AnimatePresence mode="wait" custom={tabDirectionRef.current}>
           <motion.div
             key={subScreen || activeTab}
-            initial={isSubScreen ? { x: "100%" } : { opacity: 0 }}
-            animate={isSubScreen ? { x: 0 } : { opacity: 1 }}
-            exit={isSubScreen ? { x: "100%" } : { opacity: 0 }}
-            transition={{ type: "spring", stiffness: 300, damping: 30 }}
-            className="flex-1 relative"
+            custom={tabDirectionRef.current}
+            variants={{
+              initial: (dir: number) => ({
+                x: isSubScreen ? "100%" : `${dir * 40}px`,
+                opacity: 0,
+                scale: isSubScreen ? 1 : 0.98,
+              }),
+              animate: {
+                x: 0,
+                opacity: 1,
+                scale: 1,
+                transition: { type: "spring", stiffness: 340, damping: 34 },
+              },
+              exit: (dir: number) => ({
+                x: isSubScreen ? "100%" : `${-dir * 30}px`,
+                opacity: 0,
+                scale: isSubScreen ? 1 : 0.97,
+                transition: { type: "spring", stiffness: 340, damping: 34 },
+              }),
+            }}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            className="flex-1 relative overflow-hidden"
           >
             {renderContent()}
           </motion.div>
         </AnimatePresence>
         {!showLaunchScreen && !isSubScreen && (
-          <BottomNav activeTab={activeTab} onChange={(tab) => {
-            setSubScreen(null);
-            setActiveTab(tab);
-          }} />
+          <BottomNav activeTab={activeTab} onChange={handleTabChange} />
         )}
       </div>
       <Toast 
@@ -582,6 +679,52 @@ function MainApp() {
         message={toastMsg} 
         type={toastType} 
       />
+
+      <AnimatePresence>
+        {pendingInvite && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{
+              position: 'fixed', inset: 0, background: 'rgba(26,26,26,0.8)',
+              backdropFilter: 'blur(8px)', zIndex: 9999,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px'
+            }}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-[#fcf9f4] rounded-[24px] p-8 w-full max-w-sm border border-[#D4CEC4]"
+            >
+              <h1 className="font-serif text-[28px] text-[#1A1A1A] mb-2 text-center">New Invite!</h1>
+              <p className="font-outfit text-[#6B6560] text-center mb-8">
+                <strong>{pendingInvite.fromName}</strong> has invited you to join their household.
+                {householdId ? " Accepting this will disconnect you from your current household." : ""}
+              </p>
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={handleAcceptInvite}
+                  disabled={isAcceptingInvite}
+                  className="w-full h-14 bg-[#1A1A1A] text-white rounded-full font-outfit text-[16px] font-medium"
+                >
+                  {isAcceptingInvite ? "Accepting..." : "Accept & Join"}
+                </button>
+                <button
+                  onClick={async () => {
+                    await deleteDoc(doc(db, "emailInvites", pendingInvite.id));
+                    setPendingInvite(null);
+                  }}
+                  className="w-full h-14 bg-transparent text-[#1A1A1A] rounded-full font-outfit text-[16px]"
+                >
+                  Decline
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </>
   );
 }

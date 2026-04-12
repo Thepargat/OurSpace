@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import { Plus, Check, Clock, User, Trash2, ChevronLeft } from 'lucide-react';
 import { 
   collection, 
@@ -10,8 +10,7 @@ import {
   deleteDoc, 
   doc, 
   serverTimestamp, 
-  orderBy, 
-  where,
+  orderBy,
   Timestamp
 } from 'firebase/firestore';
 import { db } from '../../firebase';
@@ -122,7 +121,7 @@ export default function ChoresTab({ onBack }: { onBack: () => void }) {
 
   return (
     <PageTransition>
-      <div className="flex flex-col h-full bg-[#F8F4EE]">
+      <div className="flex flex-col h-full bg-[#fcf9f4]">
         <div className="px-6 pt-16 pb-6 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <button onClick={onBack} className="p-2 -ml-2 text-[#1A1A1A]">

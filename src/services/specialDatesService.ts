@@ -5,15 +5,14 @@ import {
   getDocs, 
   doc, 
   getDoc, 
-  setDoc, 
-  updateDoc,
+  setDoc,
   addDoc,
   orderBy,
   limit,
   Timestamp 
 } from "firebase/firestore";
 import { db } from "../firebase";
-import { differenceInDays, addYears, isBefore, startOfDay, format, getYear } from "date-fns";
+import { differenceInDays, addYears, isBefore, startOfDay } from "date-fns";
 
 export interface SpecialDate {
   id: string;

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Plus, Check, MapPin, Tag, User, Loader2, MoreVertical } from 'lucide-react';
+import { Plus, Check, MapPin, User, Loader2 } from 'lucide-react';
 import { 
   collection, 
   query, 
@@ -296,7 +296,7 @@ export default function BucketList() {
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
-              className="relative w-full max-w-xs bg-[#F8F4EE] rounded-[32px] p-8 text-center shadow-2xl"
+              className="relative w-full max-w-xs bg-[#fcf9f4] rounded-[32px] p-8 text-center shadow-2xl"
             >
               <div className="w-16 h-16 bg-[#B8955A]/10 rounded-full flex items-center justify-center mx-auto mb-6">
                 <Check className="text-[#B8955A]" size={32} />

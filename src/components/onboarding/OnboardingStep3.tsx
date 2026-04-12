@@ -6,15 +6,12 @@ import {
   getDoc,
   onSnapshot, 
   collection, 
-  query, 
-  where, 
-  getDocs, 
   updateDoc, 
   arrayUnion,
   serverTimestamp,
   deleteDoc
 } from "firebase/firestore";
-import { db, auth } from "../../firebase";
+import { db } from "../../firebase";
 import { useAuth } from "../AuthWrapper";
 
 interface OnboardingStep3Props {
@@ -37,6 +34,9 @@ export default function OnboardingStep3({ onNext }: OnboardingStep3Props) {
   const [error, setError] = useState("");
   const [isJoining, setIsJoining] = useState(false);
   const [isShaking, setIsShaking] = useState(false);
+  const [partnerEmail, setPartnerEmail] = useState("");
+  const [isSendingInvite, setIsSendingInvite] = useState(false);
+  const [inviteSent, setInviteSent] = useState(false);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   // Generate code and setup household for CREATE mode
@@ -175,6 +175,32 @@ export default function OnboardingStep3({ onNext }: OnboardingStep3Props) {
     window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank");
   };
 
+  const sendEmailInvite = async () => {
+    if (!user || !partnerEmail || !inviteCode) return;
+    setIsSendingInvite(true);
+    try {
+      // Find the household Id we just created
+      const userDoc = await getDoc(doc(db, "users", user.uid));
+      const householdId = userDoc.data()?.householdId;
+      if (!householdId) throw new Error("No household found");
+
+      await setDoc(doc(collection(db, "emailInvites")), {
+        email: partnerEmail.toLowerCase().trim(),
+        fromUid: user.uid,
+        fromName: user.displayName || 'Your Partner',
+        householdId: householdId,
+        createdAt: serverTimestamp()
+      });
+      setInviteSent(true);
+      setPartnerEmail("");
+      setTimeout(() => setInviteSent(false), 3000);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsSendingInvite(false);
+    }
+  };
+
   return (
     <motion.div
       initial={{ opacity: 0, x: "100%" }}
@@ -183,7 +209,7 @@ export default function OnboardingStep3({ onNext }: OnboardingStep3Props) {
       transition={{ type: "spring", stiffness: 280, damping: 26 }}
       style={{
         minHeight: "100dvh",
-        background: "#F8F4EE",
+        background: "#fcf9f4",
         display: "flex",
         flexDirection: "column",
         justifyContent: "space-between",
@@ -367,6 +393,45 @@ export default function OnboardingStep3({ onNext }: OnboardingStep3Props) {
                 >
                   Share on WhatsApp
                 </motion.button>
+              </div>
+
+              <div style={{ marginTop: "24px", display: "flex", gap: "8px", justifyContent: "center" }}>
+                <input 
+                  type="email"
+                  value={partnerEmail}
+                  onChange={(e) => setPartnerEmail(e.target.value)}
+                  placeholder="Or invite by email address..."
+                  style={{
+                    flex: 1,
+                    height: "44px",
+                    borderRadius: "12px",
+                    border: "1px solid #D4CEC4",
+                    background: "#FFFFFF",
+                    fontFamily: "'Outfit', sans-serif",
+                    fontSize: "14px",
+                    color: "#1A1A1A",
+                    padding: "0 16px",
+                    outline: "none"
+                  }}
+                />
+                <button
+                  onClick={sendEmailInvite}
+                  disabled={!partnerEmail || isSendingInvite}
+                  style={{
+                    height: "44px",
+                    padding: "0 16px",
+                    borderRadius: "12px",
+                    background: "#1A1A1A",
+                    fontFamily: "'Outfit', sans-serif",
+                    fontSize: "14px",
+                    color: "#FFFFFF",
+                    border: "none",
+                    cursor: (!partnerEmail || isSendingInvite) ? "default" : "pointer",
+                    opacity: (!partnerEmail || isSendingInvite) ? 0.5 : 1
+                  }}
+                >
+                  {isSendingInvite ? '...' : inviteSent ? 'Sent!' : 'Send'}
+                </button>
               </div>
             </motion.div>
           )}
