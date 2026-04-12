@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Check, 
   Camera, 
@@ -115,6 +115,15 @@ const SectionLabel = ({ children }: { children: string }) => (
     {children}
   </h3>
 );
+
+const ensureDate = (val: any): Date | null => {
+  if (!val) return null;
+  if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
+  if (typeof val.toDate === 'function') return val.toDate();
+  if (typeof val === 'object' && val.seconds !== undefined) return new Date(val.seconds * 1000);
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? null : d;
+};
 
 // --- Main Component ---
 
@@ -446,7 +455,7 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
                 />
               </div>
               <p className="font-outfit text-[13px] text-[#6B6560]">
-                Linked since {household?.createdAt ? format(new Date(household.createdAt), 'MMM d, yyyy') : '...'}
+                Linked since {ensureDate(household?.createdAt) ? format(ensureDate(household.createdAt)!, 'MMM d, yyyy') : '...'}
               </p>
             </div>
           </motion.div>
@@ -544,7 +553,7 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
               <SettingsRow 
                 icon={CalendarHeart}
                 label="Anniversary"
-                subtext={userData?.anniversary ? format(new Date(userData.anniversary), 'MMMM d, yyyy') : 'Set date'}
+                subtext={ensureDate(userData?.anniversary) ? format(ensureDate(userData.anniversary)!, 'MMMM d, yyyy') : 'Set date'}
               />
               <input 
                 type="date"
@@ -556,7 +565,7 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
               <SettingsRow 
                 icon={CalendarHeart}
                 label="Your birthday"
-                subtext={userData?.birthday ? format(new Date(userData.birthday), 'MMMM d, yyyy') : 'Set date'}
+                subtext={ensureDate(userData?.birthday) ? format(ensureDate(userData.birthday)!, 'MMMM d, yyyy') : 'Set date'}
               />
               <input 
                 type="date"

@@ -1,5 +1,5 @@
 import { CreditCard, Wrench, ActivitySquare, ShoppingCart, Utensils, Brush, StickyNote, PiggyBank, Settings, ChevronRight, Heart } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion } from 'framer-motion';
 import PageTransition from '../ui/PageTransition';
 
 const MENU_SECTIONS = [

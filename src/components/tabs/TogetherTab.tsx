@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import PageTransition from '../ui/PageTransition';
 import MemoryWall from './MemoryWall';
 import BucketList from './BucketList';

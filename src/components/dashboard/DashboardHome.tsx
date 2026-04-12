@@ -1289,7 +1289,9 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
                   <div>
                     <p className="font-outfit text-[10px] tracking-[3px] uppercase text-brass font-black mb-1">Weekly Digest</p>
                     <p className="font-serif text-[18px] text-charcoal italic">
-                      {weeklySummary ? `${format(weeklySummary.weekStart.toDate(), "MMM d")} — ${format(weeklySummary.weekEnd.toDate(), "MMM d")}` : "..."}
+                      {weeklySummary && ensureDate(weeklySummary.weekStart) && ensureDate(weeklySummary.weekEnd) 
+                        ? `${format(ensureDate(weeklySummary.weekStart)!, "MMM d")} — ${format(ensureDate(weeklySummary.weekEnd)!, "MMM d")}` 
+                        : "..."}
                     </p>
                   </div>
                 </div>

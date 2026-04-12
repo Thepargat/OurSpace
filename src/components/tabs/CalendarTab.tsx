@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { 
   format, 
   addMonths, 
@@ -41,6 +41,15 @@ const CATEGORIES = [
 ];
 
 const spring = { type: "spring" as const, stiffness: 300, damping: 30 };
+
+const ensureDate = (val: any): Date | null => {
+  if (!val) return null;
+  if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
+  if (typeof val.toDate === 'function') return val.toDate();
+  if (typeof val === 'object' && val.seconds !== undefined) return new Date(val.seconds * 1000);
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? null : d;
+};
 
 export default function CalendarTab() {
   const { user, householdId, googleAccessToken, connectGoogleCalendar, userData, clearGoogleToken } = useAuth();
@@ -179,7 +188,7 @@ export default function CalendarTab() {
         householdId,
         user.uid,
         "Calendar",
-        `${user.displayName || 'Partner'} added ${newTitle} on ${format(selectedDate, 'MMM d')}`,
+        `${user.displayName || 'Partner'} added ${newTitle} on ${ensureDate(selectedDate) ? format(ensureDate(selectedDate)!, 'MMM d') : '...'}`,
         "calendar"
       );
       
@@ -312,10 +321,16 @@ export default function CalendarTab() {
                           <div className="text-[10px] font-outfit font-bold text-[#C97B6A] mb-2 uppercase tracking-wider">Overlap:</div>
                           <div className="flex flex-col gap-1">
                             <div className="text-sm text-[#1A1A1A] font-serif">{eventA.title}</div>
-                            <div className="text-xs text-[#6B6560] font-outfit">{format(parseISO(eventA.startTime), 'h:mm a')} - {format(parseISO(eventA.endTime), 'h:mm a')}</div>
+                            <div className="text-xs text-[#6B6560] font-outfit">
+                              {ensureDate(parseISO(eventA.startTime)) ? format(ensureDate(parseISO(eventA.startTime))!, 'h:mm a') : '...'} - 
+                              {ensureDate(parseISO(eventA.endTime)) ? format(ensureDate(parseISO(eventA.endTime))!, 'h:mm a') : '...'}
+                            </div>
                             <div className="text-[10px] text-[#C97B6A] font-bold my-1 uppercase tracking-widest">VS</div>
                             <div className="text-sm text-[#1A1A1A] font-serif">{eventB.title}</div>
-                            <div className="text-xs text-[#6B6560] font-outfit">{format(parseISO(eventB.startTime), 'h:mm a')} - {format(parseISO(eventB.endTime), 'h:mm a')}</div>
+                            <div className="text-xs text-[#6B6560] font-outfit">
+                              {ensureDate(parseISO(eventB.startTime)) ? format(ensureDate(parseISO(eventB.startTime))!, 'h:mm a') : '...'} - 
+                              {ensureDate(parseISO(eventB.endTime)) ? format(ensureDate(parseISO(eventB.endTime))!, 'h:mm a') : '...'}
+                            </div>
                           </div>
                         </div>
                       );
@@ -425,7 +440,10 @@ export default function CalendarTab() {
                           <div>
                             <h4 className="font-serif text-[18px] text-[#1A1A1A] mb-1 leading-tight">{event.title}</h4>
                             <div className="flex items-center gap-3 text-[#6B6560] font-outfit text-[13px]">
-                              <span>{format(parseISO(event.startTime), 'h:mm a')} – {format(parseISO(event.endTime), 'h:mm a')}</span>
+                              <span>
+                                {ensureDate(parseISO(event.startTime)) ? format(ensureDate(parseISO(event.startTime))!, 'h:mm a') : '...'} – 
+                                {ensureDate(parseISO(event.endTime)) ? format(ensureDate(parseISO(event.endTime))!, 'h:mm a') : '...'}
+                              </span>
                               {event.isShared && (
                                 <span className="flex items-center gap-1 text-[#B8955A] bg-[#B8955A]/10 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider">
                                   <Globe size={10} /> Together
