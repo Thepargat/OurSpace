@@ -1,1479 +1,1336 @@
-/**
- * OurSpace — FinancesTab (Complete Rebuild)
- * 3 tabs: Overview | Explorer | Analytics
- * Canvas charts, drill-down, item search, ML forecasts, bank import
- */
-
 import { useState, useEffect, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import {
-  Plus, Search, X, ChevronLeft, ChevronRight, MoreHorizontal,
-  TrendingUp, TrendingDown, Minus, Check, Trash2,
-  Loader2, ChevronDown
+import { 
+  Plus, 
+  ChevronRight, 
+  Trash2, 
+  Loader2, 
+  AlertCircle,
+  Search,
+  X,
+  TrendingUp,
+  ShoppingCart,
+  UtensilsCrossed,
+  Car,
+  Heart,
+  MoreHorizontal,
+  Receipt
 } from 'lucide-react';
 import { useAuth } from '../AuthWrapper';
 import { db, storage } from '../../firebase';
-import {
-  collection, query, onSnapshot, addDoc, serverTimestamp,
-  orderBy, doc, deleteDoc, Timestamp, getDoc, updateDoc
+import { 
+  collection, 
+  query, 
+  onSnapshot, 
+  addDoc, 
+  serverTimestamp, 
+  orderBy, 
+  limit, 
+  doc, 
+  updateDoc,
+  setDoc,
+  where,
+  getDocs,
+  increment,
+  Timestamp,
+  deleteDoc
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { format, startOfMonth, subMonths, addMonths } from 'date-fns';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import confetti from 'canvas-confetti';
+import { format, startOfMonth, endOfMonth } from 'date-fns';
+import { callGeminiVision } from "../../lib/gemini";
+import gsap from 'gsap';
+import { useGSAP } from '@gsap/react';
+import SplitType from 'split-type';
 
-import { getCategoryDef, colors } from '../../design/tokens';
-import { categorizeItem } from '../../lib/categorization';
-import { useCurrencyCountUp, SPRING_DEFAULT, SPRING_BOUNCY, haptic, fireCelebration } from '../../lib/motion';
-import { buildMonthlyAggregates, forecastCategories, calculateBudgetHealth, formatAUD, formatCompact } from '../../lib/cashflow';
-import BankImportFlow from '../finance/BankImportFlow';
+// --- Constants & Types ---
 
-// ============================================================
-// TYPES
-// ============================================================
-interface LineItem {
-  id: string;
+const CATEGORIES = [
+  { id: 'groceries', name: 'Groceries', icon: ShoppingCart },
+  { id: 'dining', name: 'Dining', icon: UtensilsCrossed },
+  { id: 'transport', name: 'Transport', icon: Car },
+  { id: 'health', name: 'Health', icon: Heart },
+  { id: 'entertainment', name: 'Entertainment', icon: MoreHorizontal },
+  { id: 'utilities', name: 'Utilities', icon: MoreHorizontal },
+  { id: 'shopping', name: 'Shopping', icon: ShoppingCart },
+  { id: 'other', name: 'Other', icon: MoreHorizontal },
+];
+
+const categoryIcons: Record<string, any> = {
+  groceries: ShoppingCart,
+  dining: UtensilsCrossed,
+  transport: Car,
+  health: Heart,
+  entertainment: MoreHorizontal,
+  utilities: MoreHorizontal,
+  shopping: ShoppingCart,
+  bakery: ShoppingCart,
+  meat: ShoppingCart,
+  produce: ShoppingCart,
+  frozen: ShoppingCart,
+  drinks: UtensilsCrossed,
+  household: ShoppingCart,
+  snacks: ShoppingCart,
+  pantry: ShoppingCart,
+  other: MoreHorizontal,
+};
+
+const MERCHANT_RULES = {
+  groceries: ["woolworths", "coles", "aldi", "iga", "harris farm", "costco", "foodworks"],
+  dining: ["mcdonald", "kfc", "hungry jacks", "subway", "domino", "pizza", "cafe", "restaurant", "bistro"],
+  transport: ["shell", "bp", "ampol", "7-eleven", "uber", "ola", "didi", "opal"],
+  health: ["chemist warehouse", "priceline", "terry white", "blooms", "pharmacy", "medical", "dental", "doctor"],
+  entertainment: ["cinema", "event", "ticketek", "ticketmaster", "hoyts", "village"],
+  utilities: ["agl", "origin energy", "optus", "telstra", "vodafone", "sydney water", "ausgrid"],
+  shopping: ["kmart", "target", "big w", "myer", "david jones", "uniqlo", "cotton on", "jb hi-fi", "harvey norman"],
+};
+
+const ITEM_RULES = [
+  { keywords: ["milk", "cream", "butter", "cheese", "yogurt", "dairy"], category: "dairy", subcategory: "dairy" },
+  { keywords: ["bread", "roll", "bun", "loaf", "croissant", "bagel"], category: "bakery", subcategory: "bread" },
+  { keywords: ["chicken", "beef", "lamb", "pork", "mince", "steak", "sausage"], category: "meat", subcategory: "meat" },
+  { keywords: ["apple", "banana", "orange", "grape", "berry", "mango", "avocado", "tomato", "lettuce", "carrot", "broccoli", "onion", "potato", "pumpkin"], category: "produce", subcategory: "fresh" },
+  { keywords: ["frozen", "ice cream"], category: "frozen", subcategory: "frozen" },
+  { keywords: ["water", "juice", "cola", "coffee", "tea", "drink", "beer", "wine", "spirit"], category: "drinks", subcategory: "beverages" },
+  { keywords: ["shampoo", "soap", "deodorant", "toothpaste", "toilet", "paper", "tissue", "detergent", "cleaner"], category: "household", subcategory: "cleaning" },
+  { keywords: ["chip", "chocolate", "biscuit", "lolly", "candy", "snack", "cake", "muffin"], category: "snacks", subcategory: "snacks" },
+  { keywords: ["pasta", "rice", "flour", "oil", "sauce", "tin", "can", "jar"], category: "pantry", subcategory: "pantry" },
+];
+
+const normalizeDate = (date: any): Date => {
+  if (!date) return new Date();
+  if (typeof date === 'string') return new Date(date);
+  if (date.toDate) return date.toDate();
+  return new Date(date);
+};
+
+interface ReceiptItem {
   name: string;
-  price: number;
-  quantity?: number;
-  unitPrice?: number;
+  quantity: number;
+  unit_price: number;
+  total_price: number;
   category: string;
-  assignedTo: 'user' | 'partner' | 'shared';
+  subcategory: string;
+  from_cache?: boolean;
+  needs_category_confirm?: boolean;
+}
+
+interface ExtractionResult {
+  merchant_name: string;
+  merchant_address: string;
+  date: string;
+  time: string;
+  receipt_number: string;
+  payment_method: string;
+  items: ReceiptItem[];
+  subtotal: number;
+  tax_gst: number;
+  discount: number;
+  total: number;
+  currency: string;
+  is_receipt: boolean;
+  confidence: number;
 }
 
 interface Expense {
   id: string;
-  merchantName: string;
+  merchant_name: string;
+  merchant_category: string;
+  merchant_address?: string;
+  date: string; // YYYY-MM-DD
+  time: string;
+  receipt_number: string;
+  payment_method: string;
+  subtotal: number;
+  tax_gst: number;
+  discount: number;
   total: number;
-  date: Date;
-  category: string;
-  lineItems: LineItem[];
+  currency: string;
+  items: ReceiptItem[];
+  receiptURL?: string;
+  status: "processing" | "needs_review" | "confirmed" | "failed";
+  duplicateIds?: string[];
   paidBy: string;
-  source?: string;
-  imageURL?: string;
-  notes?: string;
-  budgetMonth: string; // YYYY-MM
-  splits?: { userId: string; amount: number }[];
-  scannedBy?: string;
-  scannedByName?: string;
-  scannedByPhoto?: string;
+  createdAt: any;
+  source: string;
+  tempId?: string;
 }
 
-interface CategoryBudget {
-  id: string;
+interface CategoryCacheItem {
+  item_name: string;
   category: string;
-  limit: number;
+  subcategory: string;
+  merchant_category: string;
+  last_used: any;
+  use_count: number;
 }
 
-// ============================================================
-// CONSTANTS
-// ============================================================
-const MONTH_BUDGET_KEY = 'ourspace_monthly_budget';
+// --- Utilities ---
 
-// ============================================================
-// CANVAS DONUT CHART
-// ============================================================
-function DonutChart({
-  data,
-  total,
-  onSliceClick,
-}: {
-  data: Array<{ category: string; amount: number; color: string }>;
-  total: number;
-  onSliceClick: (cat: string) => void;
-}) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animRef = useRef<number>(0);
-  const progressRef = useRef(0);
+const normaliseItemName = (name: string) => {
+  return name
+    .toLowerCase()
+    .replace(/\d+g|\d+ml|\d+kg|\d+l|\d+pk/g, '') // remove sizes
+    .replace(/[^a-z\s]/g, '')
+    .trim()
+    .replace(/\s+/g, '_');
+};
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || data.length === 0) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+const getMerchantCategory = (merchantName: string) => {
+  const lower = merchantName.toLowerCase();
+  for (const [category, keywords] of Object.entries(MERCHANT_RULES)) {
+    if (keywords.some(kw => lower.includes(kw))) return category;
+  }
+  return "other";
+};
 
-    const size = canvas.width;
-    const cx = size / 2;
-    const cy = size / 2;
-    const outerR = size / 2 - 8;
-    const innerR = outerR * 0.58;
-
-    const start = Date.now();
-    const duration = 1000;
-
-    const draw = () => {
-      const elapsed = Date.now() - start;
-      const progress = Math.min(elapsed / duration, 1);
-      const eased = 1 - Math.pow(1 - progress, 3);
-
-      ctx.clearRect(0, 0, size, size);
-
-      let startAngle = -Math.PI / 2;
-      for (const seg of data) {
-        const pct  = total > 0 ? seg.amount / total : 0;
-        const sweep = pct * 2 * Math.PI * eased;
-
-        ctx.beginPath();
-        ctx.moveTo(cx, cy);
-        ctx.arc(cx, cy, outerR, startAngle, startAngle + sweep);
-        ctx.closePath();
-        ctx.fillStyle = seg.color;
-        ctx.fill();
-        startAngle += sweep;
-      }
-
-      // Inner circle (donut hole)
-      ctx.beginPath();
-      ctx.arc(cx, cy, innerR, 0, 2 * Math.PI);
-      ctx.fillStyle = colors.linen;
-      ctx.fill();
-
-      if (progress < 1) {
-        animRef.current = requestAnimationFrame(draw);
-      }
-    };
-
-    cancelAnimationFrame(animRef.current);
-    draw();
-    return () => cancelAnimationFrame(animRef.current);
-  }, [data, total]);
-
-  const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas || data.length === 0) return;
-    const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) * (canvas.width / rect.width) - canvas.width / 2;
-    const y = (e.clientY - rect.top) * (canvas.height / rect.height) - canvas.height / 2;
-    const dist = Math.sqrt(x * x + y * y);
-    const outerR = canvas.width / 2 - 8;
-    const innerR = outerR * 0.58;
-    if (dist < innerR || dist > outerR) return;
-
-    let angle = Math.atan2(y, x) + Math.PI / 2;
-    if (angle < 0) angle += 2 * Math.PI;
-
-    let startAngle = 0;
-    for (const seg of data) {
-      const sweep = total > 0 ? (seg.amount / total) * 2 * Math.PI : 0;
-      if (angle >= startAngle && angle < startAngle + sweep) {
-        onSliceClick(seg.category);
-        return;
-      }
-      startAngle += sweep;
-    }
-  };
-
-  return (
-    <canvas
-      ref={canvasRef}
-      width={180}
-      height={180}
-      className="cursor-pointer"
-      onClick={handleClick}
-      style={{ touchAction: 'none' }}
-    />
-  );
-}
-
-// ============================================================
-// CANVAS BAR CHART (weekly)
-// ============================================================
-function WeeklyBarChart({ weeklyTotals }: { weeklyTotals: number[] }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const W = canvas.width;
-    const H = canvas.height;
-    const max = Math.max(...weeklyTotals, 1);
-    const barW = W / weeklyTotals.length - 8;
-    const currentWeek = Math.floor((new Date().getDate() - 1) / 7);
-
-    const start = Date.now();
-    const duration = 700;
-
-    const draw = () => {
-      const p = Math.min((Date.now() - start) / duration, 1);
-      const eased = 1 - Math.pow(1 - p, 2);
-
-      ctx.clearRect(0, 0, W, H);
-
-      weeklyTotals.forEach((val, i) => {
-        const x = i * (barW + 8) + 4;
-        const barH = (val / max) * (H - 20) * eased;
-        const y = H - barH;
-
-        const isCurrent = i === currentWeek;
-        ctx.fillStyle = isCurrent ? colors.brass : colors.stone;
-        ctx.beginPath();
-        const r = 4;
-        ctx.moveTo(x + r, y);
-        ctx.lineTo(x + barW - r, y);
-        ctx.quadraticCurveTo(x + barW, y, x + barW, y + r);
-        ctx.lineTo(x + barW, H);
-        ctx.lineTo(x, H);
-        ctx.lineTo(x, y + r);
-        ctx.quadraticCurveTo(x, y, x + r, y);
-        ctx.closePath();
-        ctx.fill();
-      });
-
-      if (p < 1) requestAnimationFrame(draw);
-    };
-    draw();
-  }, [weeklyTotals]);
-
-  return <canvas ref={canvasRef} width={280} height={80} className="w-full" />;
-}
-
-// ============================================================
-// RECEIPT SCAN (camera → Gemini 2.5 Flash)
-// ============================================================
-async function scanReceipt(file: File, householdId: string): Promise<{
-  merchantName: string;
-  total: number;
-  lineItems: LineItem[];
-  date?: string;
-  subtotal?: number;
-  tax?: number;
-}> {
-  const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
-  if (!apiKey) throw new Error('Finance scanning requires VITE_GEMINI_API_KEY');
-
-  const reader = new FileReader();
-  const base64 = await new Promise<string>((res, rej) => {
-    reader.onload = e => res((e.target?.result as string).split(',')[1]);
-    reader.onerror = rej;
-    reader.readAsDataURL(file);
-  });
-
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-
-  const result = await model.generateContent([
-    { inlineData: { mimeType: file.type as any, data: base64 } },
-    `You are an expert receipt parser. Extract ALL details from this receipt. Return ONLY valid JSON (no markdown, no comments):
-{
-  "merchantName": "exact store name from receipt",
-  "date": "YYYY-MM-DD or null",
-  "subtotal": 0.00,
-  "tax": 0.00,
-  "total": 0.00,
-  "lineItems": [
-    {
-      "name": "exact item name",
-      "quantity": 1,
-      "unitPrice": 0.00,
-      "price": 0.00
-    }
-  ]
-}
-
-Rules:
-- Include EVERY line item on the receipt
-- quantity: number of units purchased (default 1 if not shown)
-- unitPrice: price for ONE unit (price / quantity)
-- price: total line item price (quantity × unitPrice)
-- subtotal: sum before tax
-- tax: tax amount (0 if not shown)
-- total: grand total including tax. If not visible, sum all items + tax
-- Do NOT include subtotal/tax/total as line items`
-  ]);
-
-  const text = result.response.text().trim()
-    .replace(/```json\n?/g, '')
-    .replace(/```\n?/g, '')
-    .trim();
-
-  const parsed = JSON.parse(text);
-
-  // Categorize each line item
-  const items: LineItem[] = await Promise.all(
-    (parsed.lineItems || []).map(async (item: any, i: number) => {
-      const catResult = await categorizeItem(item.name, parsed.merchantName, householdId);
-      const qty = parseFloat(item.quantity) || 1;
-      const unitPrice = parseFloat(item.unitPrice) || parseFloat(item.price) / qty || 0;
-      const totalPrice = parseFloat(item.price) || unitPrice * qty;
-      return {
-        id: `item-${i}`,
-        name: item.name || 'Item',
-        price: Math.round(totalPrice * 100) / 100,
-        quantity: qty,
-        unitPrice: Math.round(unitPrice * 100) / 100,
-        category: catResult.cat,
-        assignedTo: 'shared' as const,
-      };
-    })
-  );
-
-  const computedTotal = items.reduce((s, i) => s + i.price, 0);
-  const finalTotal = parseFloat(parsed.total) || computedTotal;
-
-  return {
-    merchantName: parsed.merchantName || 'Unknown',
-    total: Math.round(finalTotal * 100) / 100,
-    subtotal: parseFloat(parsed.subtotal) || computedTotal,
-    tax: parseFloat(parsed.tax) || 0,
-    lineItems: items,
-    date: parsed.date || null,
-  };
-}
-
-// ============================================================
-// RECEIPT CARD
-// ============================================================
-function ReceiptCard({
-  expense, isExpanded, onToggle, onDelete, currentUserId, partnerData,
-}: {
-  expense: Expense; isExpanded: boolean; onToggle: () => void; onDelete: () => void;
-  currentUserId: string;
-  partnerData?: { uid: string; displayName: string; photoURL: string };
-}) {
-  const catDef = getCategoryDef(expense.category);
-
-  return (
-    <motion.div layout className="bg-white border border-black/[0.06] rounded-2xl overflow-hidden shadow-sm">
-      {/* Header */}
-      <motion.div className="flex items-center gap-3 p-4 cursor-pointer" onClick={onToggle} whileTap={{ scale: 0.99 }}>
-        <div className="w-10 h-10 rounded-xl flex items-center justify-center text-[18px] flex-shrink-0" style={{ background: catDef.light }}>
-          {catDef.emoji}
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="font-outfit text-[14px] font-semibold text-[#1A1A1A] truncate">{expense.merchantName}</p>
-          <p className="font-outfit text-[11px] text-[#6B6560]">
-            {format(expense.date, 'd MMM yyyy')}
-            {expense.lineItems.length > 0 && ` · ${expense.lineItems.length} item${expense.lineItems.length > 1 ? 's' : ''}`}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {expense.scannedByPhoto && (
-            <img src={expense.scannedByPhoto} className="w-5 h-5 rounded-full border border-[#D4CEC4]" referrerPolicy="no-referrer" />
-          )}
-          <p className="font-serif text-[16px] text-[#1A1A1A]">{formatAUD(expense.total)}</p>
-          <motion.div animate={{ rotate: isExpanded ? 180 : 0 }} transition={SPRING_DEFAULT}>
-            <ChevronDown size={16} className="text-[#B8955A]" />
-          </motion.div>
-        </div>
-      </motion.div>
-
-      {/* Expanded line items */}
-      <AnimatePresence>
-        {isExpanded && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={SPRING_DEFAULT}
-            className="overflow-hidden border-t border-black/[0.05]"
-          >
-            <div className="p-4 pt-3 space-y-1.5">
-              {/* Column headers */}
-              <div className="flex items-center gap-2 pb-1 border-b border-black/[0.05] mb-2">
-                <span className="w-5 flex-shrink-0" />
-                <span className="flex-1 font-outfit text-[10px] uppercase tracking-wider text-[#6B6560]">Item</span>
-                <span className="w-20 text-right font-outfit text-[10px] uppercase tracking-wider text-[#6B6560]">Qty × Price</span>
-                <span className="w-16 text-right font-outfit text-[10px] uppercase tracking-wider text-[#6B6560]">Total</span>
-              </div>
-
-              {expense.lineItems.map(item => {
-                const itemCat = getCategoryDef(item.category);
-                const unitPrice = (item as any).unitPrice || item.price / (item.quantity || 1);
-                return (
-                  <div key={item.id} className="flex items-center gap-2 py-1">
-                    <span className="text-[13px] flex-shrink-0 w-5">{itemCat.emoji}</span>
-                    <span className="flex-1 font-outfit text-[12px] text-[#1A1A1A] truncate">{item.name}</span>
-                    {(item.quantity || 1) > 1 ? (
-                      <span className="w-20 text-right font-outfit text-[11px] text-[#6B6560]">
-                        {item.quantity}×{formatAUD(unitPrice)}
-                      </span>
-                    ) : (
-                      <span className="w-20 text-right font-outfit text-[11px] text-[#6B6560]">—</span>
-                    )}
-                    <span className="w-16 text-right font-outfit text-[13px] text-[#1A1A1A] font-medium">{formatAUD(item.price)}</span>
-                  </div>
-                );
-              })}
-
-              {/* Totals footer */}
-              <div className="pt-2 mt-1 border-t border-black/[0.05]">
-                <div className="flex justify-between items-center">
-                  <button onClick={onDelete} className="flex items-center gap-1 font-outfit text-[11px] text-[#C47B6A]">
-                    <Trash2 size={11} /> Delete
-                  </button>
-                  <div className="text-right">
-                    <p className="font-serif text-[15px] text-[#1A1A1A] font-semibold">{formatAUD(expense.total)}</p>
-                    <p className="font-outfit text-[10px] text-[#6B6560]">{expense.lineItems.length} item{expense.lineItems.length > 1 ? 's' : ''}</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </motion.div>
-  );
-}
-
-// ============================================================
-// CATEGORY DRILL-DOWN SCREEN
-// ============================================================
-function CategoryDrillDown({
-  category,
-  expenses,
-  onBack,
-}: {
-  category: string;
-  expenses: Expense[];
-  onBack: () => void;
-}) {
-  const catDef = getCategoryDef(category);
-  const catExpenses = expenses.filter(e =>
-    e.category === category || e.lineItems.some(i => i.category === category)
-  );
-
-  const allItems: Array<{ name: string; price: number; merchant: string; date: Date }> = [];
-  for (const exp of catExpenses) {
-    const items = exp.lineItems.filter(i => i.category === category);
-    if (items.length > 0) {
-      items.forEach(item => allItems.push({ name: item.name, price: item.price, merchant: exp.merchantName, date: exp.date }));
-    } else {
-      allItems.push({ name: exp.merchantName, price: exp.total, merchant: exp.merchantName, date: exp.date });
+const applyItemRules = (itemName: string) => {
+  const lower = itemName.toLowerCase();
+  for (const rule of ITEM_RULES) {
+    if (rule.keywords.some(kw => lower.includes(kw))) {
+      return { category: rule.category, subcategory: rule.subcategory };
     }
   }
+  return { category: "other", subcategory: "other" };
+};
 
-  const total = allItems.reduce((s, i) => s + i.price, 0);
+// --- Components ---
 
-  return (
-    <motion.div
-      initial={{ x: '100%' }}
-      animate={{ x: 0 }}
-      exit={{ x: '100%' }}
-      transition={SPRING_DEFAULT}
-      className="fixed inset-0 z-[200] bg-[#fcf9f4] flex flex-col"
-      style={{ paddingTop: 'env(safe-area-inset-top)' }}
-    >
-      {/* Header */}
-      <div className="px-5 pt-4 pb-3 flex items-center gap-3 border-b border-[#D4CEC4] flex-shrink-0">
-        <button
-          onClick={onBack}
-          className="w-10 h-10 rounded-full bg-[#EDE8DF] flex items-center justify-center"
-        >
-          <ChevronLeft size={20} className="text-[#1A1A1A]" />
-        </button>
-        <span className="text-[20px]">{catDef.emoji}</span>
-        <div>
-          <h2 className="font-serif text-[20px] text-[#1A1A1A]">{catDef.label}</h2>
-          <p className="font-outfit text-[12px] text-[#6B6560]">
-            {allItems.length} items · {formatAUD(total)}
-          </p>
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto px-5 py-4">
-        <div className="space-y-2">
-          {allItems
-            .sort((a, b) => b.date.getTime() - a.date.getTime())
-            .map((item, i) => (
-              <div key={i} className="flex items-center gap-3 p-3 bg-[#EDE8DF] rounded-2xl border border-[#D4CEC4]">
-                <div className="flex-1 min-w-0">
-                  <p className="font-outfit text-[14px] font-medium text-[#1A1A1A] truncate">{item.name}</p>
-                  <p className="font-outfit text-[11px] text-[#6B6560]">
-                    {item.merchant} · {format(item.date, 'd MMM')}
-                  </p>
-                </div>
-                <p className="font-serif text-[15px] text-[#1A1A1A]">{formatAUD(item.price)}</p>
-              </div>
-            ))}
-        </div>
-      </div>
-    </motion.div>
-  );
-}
-
-// ============================================================
-// SCAN RECEIPT SHEET
-// ============================================================
-function ScanReceiptSheet({
-  onClose,
-  onSaved,
-  householdId,
-  userId,
-  userDisplayName,
-  userPhotoURL,
-}: {
-  onClose: () => void;
-  onSaved: () => void;
-  householdId: string;
-  userId: string;
-  userDisplayName: string;
-  userPhotoURL?: string;
-}) {
-  const [scanning, setScanning] = useState(false);
-  const [scanned, setScanned] = useState<Awaited<ReturnType<typeof scanReceipt>> | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-  const cameraRef = useRef<HTMLInputElement>(null);
-  const galleryRef = useRef<HTMLInputElement>(null);
-  const [imageURL, setImageURL] = useState<string | null>(null);
-
-  const handleFile = async (file: File) => {
-    setScanning(true);
-    setError('');
-    setImageURL(URL.createObjectURL(file));
-    try {
-      const result = await scanReceipt(file, householdId);
-      setScanned(result);
-    } catch (e: any) {
-      setError(e.message || 'Could not read receipt');
-    } finally {
-      setScanning(false);
-    }
-  };
-
-  const handleSave = async () => {
-    if (!scanned || saving) return;
-    setSaving(true);
-    try {
-      const now = new Date();
-      const budgetMonth = format(now, 'yyyy-MM');
-
-      // Upload image if available
-      let savedImageURL = '';
-      if (imageURL) {
-        try {
-          const file = cameraRef.current?.files?.[0] || galleryRef.current?.files?.[0];
-          if (file) {
-            const storageRef = ref(storage, `households/${householdId}/receipts/${Date.now()}_${file.name}`);
-            await uploadBytes(storageRef, file);
-            savedImageURL = await getDownloadURL(storageRef);
-          }
-        } catch (e) {
-          // Storage unavailable (Spark plan) — continue without image
-        }
-      }
-
-      const expenseDate = scanned.date ? new Date(scanned.date) : now;
-      const finalDate = isNaN(expenseDate.getTime()) ? now : expenseDate;
-
-      await addDoc(collection(db, `households/${householdId}/expenses`), {
-        merchantName: scanned.merchantName,
-        total: scanned.total,
-        date: finalDate,
-        category: scanned.lineItems[0]?.category || 'other',
-        lineItems: scanned.lineItems,
-        paidBy: userId,
-        scannedBy: userId,
-        scannedByName: userDisplayName,
-        scannedByPhoto: userPhotoURL || null,
-        imageURL: savedImageURL || null,
-        budgetMonth,
-        source: 'receipt_scan',
-        createdAt: serverTimestamp(),
-      });
-
-      haptic.success();
-      onSaved();
-      onClose();
-    } catch (e: any) {
-      setError(e.message || 'Failed to save');
-      setSaving(false);
-    }
-  };
-
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 z-[9999] bg-[#1A1A1A]/60 backdrop-blur-sm flex items-end"
-    >
-      <motion.div
-        initial={{ y: '100%' }}
-        animate={{ y: 0 }}
-        exit={{ y: '100%' }}
-        transition={SPRING_DEFAULT}
-        className="bg-[#fcf9f4] rounded-t-[28px] w-full max-h-[90dvh] flex flex-col"
-      >
-        <div className="px-6 pt-5 pb-4 flex items-center justify-between flex-shrink-0">
-          <h2 className="font-serif text-[20px] text-[#1A1A1A]">Scan Receipt</h2>
-          <button onClick={onClose} className="w-10 h-10 rounded-full bg-[#EDE8DF] flex items-center justify-center">
-            <X size={18} />
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-6 pb-8">
-          <input
-            ref={cameraRef}
-            type="file"
-            className="hidden"
-            accept="image/*"
-            capture="environment"
-            onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
-          />
-          <input
-            ref={galleryRef}
-            type="file"
-            className="hidden"
-            accept="image/*"
-            onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
-          />
-
-          {/* Upload button */}
-          {!scanned && !scanning && (
-            <div className="grid grid-cols-1 gap-4">
-              <motion.button
-                whileTap={{ scale: 0.97 }}
-                onClick={() => cameraRef.current?.click()}
-                className="w-full bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl p-8 flex flex-col items-center gap-3 active:bg-[#E5E0D7] transition-colors"
-              >
-                <div className="w-12 h-12 rounded-full bg-white/50 flex items-center justify-center text-xl shadow-sm">
-                  📷
-                </div>
-                <div className="text-center">
-                  <p className="font-serif text-[17px] text-[#1A1A1A]">Use Camera</p>
-                  <p className="font-outfit text-[12px] text-[#6B6560]">Take a new photo now</p>
-                </div>
-              </motion.button>
-
-              <motion.button
-                whileTap={{ scale: 0.97 }}
-                onClick={() => galleryRef.current?.click()}
-                className="w-full bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl p-8 flex flex-col items-center gap-3 active:bg-[#E5E0D7] transition-colors"
-              >
-                <div className="w-12 h-12 rounded-full bg-white/50 flex items-center justify-center text-xl shadow-sm">
-                  🖼️
-                </div>
-                <div className="text-center">
-                  <p className="font-serif text-[17px] text-[#1A1A1A]">Photo Library</p>
-                  <p className="font-outfit text-[12px] text-[#6B6560]">Choose from your phone</p>
-                </div>
-              </motion.button>
-            </div>
-          )}
-
-          {/* Scanning */}
-          {scanning && (
-            <div className="flex flex-col items-center justify-center py-12">
-              <Loader2 size={40} className="text-[#B8955A] animate-spin mb-4" />
-              <p className="font-outfit text-[15px] text-[#6B6560]">Reading receipt with AI...</p>
-              {imageURL && (
-                <img src={imageURL} className="mt-4 rounded-xl max-h-40 object-contain opacity-50" alt="Receipt" />
-              )}
-            </div>
-          )}
-
-          {/* Results */}
-          {scanned && (
-            <motion.div
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="space-y-4"
-            >
-              {imageURL && (
-                <div className="relative">
-                  <img src={imageURL} className="rounded-2xl w-full max-h-48 object-contain bg-black/5" alt="Receipt" />
-                  <div className="absolute inset-0 rounded-2xl bg-gradient-to-t from-black/20 to-transparent" />
-                </div>
-              )}
-
-              {/* Summary card */}
-              <div className="bg-[#1A1A1A] rounded-2xl p-4 relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-32 h-32 rounded-full bg-[#B8955A] opacity-10 blur-2xl" />
-                <p className="font-outfit text-[10px] uppercase tracking-[2px] text-[#B8955A] mb-1">Merchant</p>
-                <h3 className="font-serif text-[20px] text-white mb-3">{scanned.merchantName}</h3>
-                <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <p className="font-outfit text-[9px] uppercase tracking-wider text-white/40">Subtotal</p>
-                    <p className="font-serif text-[15px] text-white">{formatAUD((scanned as any).subtotal || scanned.total)}</p>
-                  </div>
-                  <div>
-                    <p className="font-outfit text-[9px] uppercase tracking-wider text-white/40">Tax</p>
-                    <p className="font-serif text-[15px] text-white">{formatAUD((scanned as any).tax || 0)}</p>
-                  </div>
-                  <div>
-                    <p className="font-outfit text-[9px] uppercase tracking-wider text-white/40">Total</p>
-                    <p className="font-serif text-[16px] text-[#B8955A] font-semibold">{formatAUD(scanned.total)}</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Line items with qty × unit price */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <p className="font-outfit text-[10px] uppercase tracking-[2px] text-[#B8955A]">
-                    {scanned.lineItems.length} Line Item{scanned.lineItems.length > 1 ? 's' : ''}
-                  </p>
-                  {/* Category breakdown mini chart */}
-                  <div className="flex gap-1">
-                    {Object.entries(
-                      scanned.lineItems.reduce((acc: any, item) => {
-                        acc[item.category] = (acc[item.category] || 0) + item.price;
-                        return acc;
-                      }, {})
-                    ).slice(0, 3).map(([cat, amt]: any) => (
-                      <span
-                        key={cat}
-                        className="font-outfit text-[9px] px-2 py-0.5 rounded-full text-white"
-                        style={{ background: getCategoryDef(cat).color }}
-                      >
-                        {getCategoryDef(cat).emoji} {Math.round((amt / scanned.total) * 100)}%
-                      </span>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Column headers */}
-                <div className="flex gap-2 px-3 py-1.5 bg-[#EDE8DF] rounded-t-xl border border-[#D4CEC4] border-b-0">
-                  <span className="flex-1 font-outfit text-[10px] uppercase tracking-wider text-[#6B6560]">Item</span>
-                  <span className="w-24 text-right font-outfit text-[10px] uppercase tracking-wider text-[#6B6560]">Qty × Unit</span>
-                  <span className="w-16 text-right font-outfit text-[10px] uppercase tracking-wider text-[#6B6560]">Total</span>
-                </div>
-
-                <div className="bg-[#EDE8DF] rounded-b-xl border border-[#D4CEC4] border-t-0 overflow-hidden">
-                  {scanned.lineItems.map((item, i) => {
-                    const catDef = getCategoryDef(item.category);
-                    const unitP = (item as any).unitPrice || item.price / (item.quantity || 1);
-                    return (
-                      <motion.div
-                        key={i}
-                        initial={{ opacity: 0, x: -12 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: i * 0.04 }}
-                        className={`flex items-center gap-2 px-3 py-2.5 ${
-                          i < scanned.lineItems.length - 1 ? 'border-b border-[#D4CEC4]/60' : ''
-                        }`}
-                      >
-                        <span className="text-[14px] flex-shrink-0">{catDef.emoji}</span>
-                        <span className="flex-1 font-outfit text-[12px] text-[#1A1A1A] truncate">{item.name}</span>
-                        {(item.quantity || 1) > 1 ? (
-                          <span className="w-24 text-right font-outfit text-[11px] text-[#6B6560]">
-                            {item.quantity}×{formatAUD(unitP)}
-                          </span>
-                        ) : (
-                          <span className="w-24 text-right font-outfit text-[11px] text-[#6B6560]">
-                            {formatAUD(unitP)}
-                          </span>
-                        )}
-                        <span className="w-16 text-right font-outfit text-[13px] text-[#1A1A1A] font-semibold">
-                          {formatAUD(item.price)}
-                        </span>
-                      </motion.div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {error && (
-                <p className="font-outfit text-[13px] text-[#C47B6A] bg-red-50 p-3 rounded-xl">{error}</p>
-              )}
-
-              {/* Actions */}
-              <div className="flex gap-3 pt-1 pb-2">
-                <button
-                  onClick={() => { setScanned(null); setImageURL(null); setError(''); }}
-                  className="flex-1 h-12 rounded-full border border-[#D4CEC4] font-outfit text-[14px] text-[#6B6560]"
-                >
-                  Retake
-                </button>
-                <motion.button
-                  whileTap={{ scale: 0.97 }}
-                  onClick={handleSave}
-                  disabled={saving}
-                  className="flex-1 h-12 rounded-full bg-[#1A1A1A] text-white font-outfit text-[14px] font-semibold flex items-center justify-center gap-2"
-                >
-                  {saving ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
-                  {saving ? 'Saving...' : 'Save Receipt'}
-                </motion.button>
-              </div>
-            </motion.div>
-          )}
-        </div>
-      </motion.div>
-    </motion.div>
-  );
-}
-
-// ============================================================
-// MAIN FINANCES TAB
-// ============================================================
 export default function FinancesTab() {
-  const { user, householdId, userData } = useAuth();
-  const [activeTab, setActiveTab] = useState<'overview' | 'explorer' | 'analytics'>('overview');
-  const [viewMonth, setViewMonth] = useState(new Date());
+  const { user, householdId } = useAuth();
+  
+  // Refs
+  const amountRef = useRef<HTMLSpanElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
+  const progressBarRef = useRef<HTMLDivElement>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // UI State
+  const [isActionSheetOpen, setIsActionSheetOpen] = useState(false);
+  const [isReviewSheetOpen, setIsReviewSheetOpen] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [expandedReceiptId, setExpandedReceiptId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [toast, setToast] = useState<string | null>(null);
+  
+  // Data State
   const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [bankTransactions, setBankTransactions] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [showScanSheet, setShowScanSheet] = useState(false);
-  const [showBankImport, setShowBankImport] = useState(false);
-  const [showMenu, setShowMenu] = useState(false);
-  const [drillDownCat, setDrillDownCat] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [monthlyBudget, setMonthlyBudget] = useState(3000);
-  const [partnerData, setPartnerData] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [receiptData, setReceiptData] = useState<Expense | null>(null);
+  const [receiptPhotoURL, setReceiptPhotoURL] = useState<string | null>(null);
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
 
-  // ---- Data listeners ----
-  useEffect(() => {
-    if (!householdId) return;
+  // --- Derived Data ---
 
-    const unsubExpenses = onSnapshot(
-      query(collection(db, `households/${householdId}/expenses`), orderBy('date', 'desc')),
-      snap => {
-        const data = snap.docs.map(d => {
-          const raw = d.data();
-          return {
-            id: d.id,
-            merchantName: raw.merchantName || 'Unknown',
-            total: raw.total || 0,
-            date: raw.date instanceof Timestamp ? raw.date.toDate() : new Date(raw.date),
-            category: raw.category || 'other',
-            lineItems: raw.lineItems || [],
-            paidBy: raw.paidBy || '',
-            source: raw.source || 'manual',
-            imageURL: raw.imageURL || null,
-            notes: raw.notes || '',
-            budgetMonth: raw.budgetMonth || format(new Date(), 'yyyy-MM'),
-            scannedBy: raw.scannedBy || null,
-            scannedByName: raw.scannedByName || null,
-            scannedByPhoto: raw.scannedByPhoto || null,
-          } as Expense;
-        });
-        setExpenses(data);
-        setLoading(false);
-      }
-    );
-
-    const unsubBank = onSnapshot(
-      query(collection(db, `households/${householdId}/bankTransactions`), orderBy('date', 'desc')),
-      snap => {
-        setBankTransactions(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-      }
-    );
-
-    return () => { unsubExpenses(); unsubBank(); };
-  }, [householdId]);
-
-  // Load monthly budget from Firestore (set in Settings)
-  useEffect(() => {
-    if (!householdId) return;
-    const unsubBudget = onSnapshot(doc(db, 'households', householdId), (snap) => {
-      const data = snap.data();
-      const limit = data?.budgetSettings?.monthlyLimit;
-      if (limit && typeof limit === 'number' && limit > 0) {
-        setMonthlyBudget(limit);
-      }
-    });
-    return () => unsubBudget();
-  }, [householdId]);
-
-  // ---- Derived data ----
-  const monthKey = format(viewMonth, 'yyyy-MM');
-
-  const monthExpenses = useMemo(() =>
-    expenses.filter(e => e.budgetMonth === monthKey),
-    [expenses, monthKey]
-  );
-
-  const totalSpent = useMemo(() =>
-    monthExpenses.reduce((s, e) => s + e.total, 0),
-    [monthExpenses]
-  );
-
-  const monthIncome = useMemo(() => {
-    const incomes = bankTransactions.filter(t => {
-      const tDate = t.date instanceof Timestamp ? t.date.toDate() : new Date(t.date);
-      return format(tDate, 'yyyy-MM') === monthKey && t.type === 'credit' && t.incomeType !== 'transfer';
-    });
-    return incomes.reduce((s: number, t: any) => s + Math.abs(t.amount || 0), 0);
-  }, [bankTransactions, monthKey]);
-
-  const categoryTotals = useMemo(() => {
-    const map: Record<string, number> = {};
-    for (const exp of monthExpenses) {
-      map[exp.category] = (map[exp.category] || 0) + exp.total;
-    }
-    return Object.entries(map)
-      .sort((a, b) => b[1] - a[1])
-      .map(([cat, amount]) => ({
-        category: cat,
-        amount,
-        ...getCategoryDef(cat),
-      }));
-  }, [monthExpenses]);
-
-  const donutData = useMemo(() =>
-    categoryTotals.map(ct => ({ category: ct.category, amount: ct.amount, color: ct.color })),
-    [categoryTotals]
-  );
-
-  const weeklyTotals = useMemo(() => {
-    const start = startOfMonth(viewMonth);
-    const weeks = [0, 0, 0, 0, 0];
-    for (const exp of monthExpenses) {
-      const weekIdx = Math.min(Math.floor((exp.date.getDate() - 1) / 7), 4);
-      weeks[weekIdx] += exp.total;
-    }
-    return weeks.filter((_, i) => {
-      const weekStart = new Date(start.getFullYear(), start.getMonth(), i * 7 + 1);
-      return weekStart <= new Date();
-    });
-  }, [monthExpenses, viewMonth]);
-
-  const budgetHealth = useMemo(() =>
-    calculateBudgetHealth(monthlyBudget, totalSpent, monthIncome, 0),
-    [monthlyBudget, totalSpent, monthIncome]
-  );
-
-  // All-time aggregates for ML
-  const allTimeAggregates = useMemo(() => {
-    const allData = expenses.map(e => ({
-      amount: e.total,
-      category: e.category,
-      date: e.date,
-      type: 'expense' as const,
-    }));
-    return buildMonthlyAggregates(allData);
+  const totalMonthlySpend = useMemo(() => {
+    const start = startOfMonth(new Date());
+    const end = endOfMonth(new Date());
+    return expenses
+      .filter(e => {
+        const d = normalizeDate(e.date);
+        return d >= start && d <= end;
+      })
+      .reduce((sum, e) => sum + (Number(e.total) || 0), 0);
   }, [expenses]);
 
-  const categoryForecasts = useMemo(() =>
-    forecastCategories(allTimeAggregates),
-    [allTimeAggregates]
-  );
+  // Clear toast timer on unmount
+  useEffect(() => {
+    return () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); };
+  }, []);
 
-  // Filtered expenses for Explorer
-  const filteredExpenses = useMemo(() => {
-    if (!searchQuery) return monthExpenses;
-    const q = searchQuery.toLowerCase();
-    return expenses.filter(e =>
-      e.merchantName.toLowerCase().includes(q) ||
-      e.lineItems.some(i => i.name.toLowerCase().includes(q))
-    );
-  }, [expenses, monthExpenses, searchQuery]);
+  // Digit flip animation for monthly spend
+  useEffect(() => {
+    if (!amountRef.current) return;
+    const split = new SplitType(amountRef.current, { types: 'chars' });
+    gsap.from(split.chars, {
+      yPercent: 100,
+      opacity: 0,
+      duration: 0.5,
+      stagger: 0.04,
+      ease: 'power4.out',
+      delay: 0.2
+    });
+    return () => split.revert();
+  }, [totalMonthlySpend]);
 
-  // Item search (all time)
-  const itemSearchResults = useMemo(() => {
-    if (!searchQuery || searchQuery.length < 2) return [];
-    const q = searchQuery.toLowerCase();
-    const found: Array<{ name: string; merchant: string; price: number; date: Date }> = [];
-    for (const e of expenses) {
-      for (const item of e.lineItems) {
-        if (item.name.toLowerCase().includes(q)) {
-          found.push({ name: item.name, merchant: e.merchantName, price: item.price, date: e.date });
-        }
-      }
+  // If still saving after 10 seconds something is wrong
+  useEffect(() => {
+    if (!isSaving) return;
+    const timeout = setTimeout(() => {
+      setIsSaving(false);
+      alert("Save is taking too long. Please try again.");
+    }, 10000);
+    return () => clearTimeout(timeout);
+  }, [isSaving]);
+
+  // --- Firestore Listeners ---
+
+  useEffect(() => {
+    if (!householdId) return;
+    const expensesRef = collection(db, "households", householdId, "expenses");
+    const q = query(expensesRef, orderBy("date", "desc"), limit(50));
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const newExpenses = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Expense));
+      setExpenses(newExpenses);
+      setIsLoading(false);
+    });
+    
+    return () => unsubscribe();
+  }, [householdId]);
+
+  const categoryBreakdown = useMemo(() => {
+    const totals: Record<string, number> = {};
+    expenses.forEach(e => {
+      const amount = Number(e.total) || 0;
+      totals[e.merchant_category] = (totals[e.merchant_category] || 0) + amount;
+    });
+    return CATEGORIES.map(cat => ({
+      ...cat,
+      total: totals[cat.id] || 0
+    })).filter(c => c.total > 0);
+  }, [expenses]);
+
+  const budget = 3000;
+  const spendPercentage = Math.min((totalMonthlySpend / budget) * 100, 100);
+
+  useGSAP(() => {
+    if (progressBarRef.current) {
+      gsap.fromTo(progressBarRef.current, 
+        { width: "0%" }, 
+        { width: `${spendPercentage}%`, duration: 1.5, ease: "power2.out" }
+      );
     }
-    return found.sort((a, b) => b.date.getTime() - a.date.getTime()).slice(0, 30);
+  }, [spendPercentage, isLoading]);
+
+  // --- Handlers ---
+
+  const handleTakePhoto = () => {
+    cameraInputRef.current?.click();
+    setIsActionSheetOpen(false);
+  };
+
+  const handleChooseFromLibrary = () => {
+    galleryInputRef.current?.click();
+    setIsActionSheetOpen(false);
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !householdId) return;
+
+    const tempId = `temp_${Date.now()}`;
+    const optimisticReceipt: Expense = {
+      id: tempId,
+      status: "processing",
+      merchant_name: "Scanning...",
+      merchant_category: "other",
+      total: 0,
+      subtotal: 0,
+      tax_gst: 0,
+      discount: 0,
+      currency: "AUD",
+      items: [],
+      date: new Date().toISOString().split('T')[0],
+      time: "",
+      receipt_number: "",
+      payment_method: "unknown",
+      createdAt: new Date(),
+      paidBy: user?.uid || "unknown",
+      source: "receipt_scan",
+      tempId
+    };
+
+    // Step 1 — Instant optimistic add
+    setExpenses(prev => [optimisticReceipt, ...prev]);
+    setIsActionSheetOpen(false);
+    
+    // Step 2 — Process in background
+    processReceiptInBackground(file, tempId);
+  };
+
+  const processReceiptInBackground = async (photoFile: File, tempId: string) => {
+    try {
+      // 1. Convert to base64
+      const reader = new FileReader();
+      const base64Promise = new Promise<string>((resolve) => {
+        reader.onload = () => resolve((reader.result as string).split(',')[1]);
+        reader.readAsDataURL(photoFile);
+      });
+      const base64Data = await base64Promise;
+
+      // 2. Call Gemini — only for extraction
+      const extracted = await extractWithGemini(base64Data, photoFile.type);
+
+      // 3. Apply local category cache — NO AI needed for this
+      const categorised = await applyCategoryCache(extracted);
+
+      // 4. Check for duplicates — algorithm, not AI
+      const duplicates = await checkDuplicates(categorised);
+
+      // 5. Save to Firestore
+      const docRef = await addDoc(
+        collection(db, "households", householdId!, "expenses"),
+        {
+          ...categorised,
+          status: "needs_review",
+          duplicateIds: duplicates.map(d => d.id),
+          tempId,
+          createdAt: serverTimestamp(),
+          paidBy: user?.uid || "unknown",
+          source: "receipt_scan"
+        }
+      );
+
+      // 6. Upload photo in background
+      uploadPhotoInBackground(photoFile, docRef.id);
+
+      // 7. Replace optimistic item with real data
+      setExpenses(prev => prev.map(e =>
+        e.id === tempId ? { 
+          ...categorised, 
+          id: docRef.id, 
+          status: "needs_review", 
+          createdAt: Timestamp.now(),
+          paidBy: user?.uid || "unknown",
+          source: "receipt_scan"
+        } as Expense : e
+      ));
+
+      // 8. Show subtle toast notification
+      showToast(`Receipt from ${categorised.merchant_name} added — tap to review`);
+
+    } catch (err) {
+      console.error("Background processing failed:", err);
+      // Mark as failed
+      setExpenses(prev => prev.map(e =>
+        e.id === tempId ? { ...e, status: "failed" } as Expense : e
+      ));
+      showToast("Receipt scan failed — tap to retry");
+    }
+  };
+
+  const extractWithGemini = async (base64Data: string, mimeType: string): Promise<ExtractionResult> => {
+    const prompt = `Extract receipt data. Return ONLY valid JSON, no markdown, no explanation:
+    {
+      "merchant_name": "exact store name as printed",
+      "merchant_address": "if visible",
+      "date": "YYYY-MM-DD",
+      "time": "HH:MM",
+      "receipt_number": "if visible",
+      "payment_method": "card|cash|unknown",
+      "items": [
+        {
+          "name": "exact item name as printed",
+          "quantity": 1,
+          "unit_price": 0.00,
+          "total_price": 0.00
+        }
+      ],
+      "subtotal": 0.00,
+      "tax_gst": 0.00,
+      "discount": 0.00,
+      "total": 0.00,
+      "currency": "AUD",
+      "is_receipt": true,
+      "confidence": 0.95
+    }`;
+
+    const text = await callGeminiVision(prompt, base64Data, mimeType, "gemini-2.0-flash");
+    const cleanJson = text.replace(/```json|```/g, "").trim();
+    try {
+      return JSON.parse(cleanJson) as ExtractionResult;
+    } catch {
+      throw new Error("Failed to parse receipt data from Gemini response");
+    }
+  };
+
+  const applyCategoryCache = async (extracted: ExtractionResult) => {
+    if (!householdId) return extracted;
+
+    // Load entire cache once — it's small
+    const cacheSnap = await getDocs(collection(db, "households", householdId, "categoryCache"));
+    const cache: Record<string, CategoryCacheItem> = {};
+    cacheSnap.forEach(doc => { cache[doc.id] = doc.data() as CategoryCacheItem; });
+
+    // Apply merchant-level categorisation
+    const merchantCategory = getMerchantCategory(extracted.merchant_name);
+
+    // Apply item-level categorisation from cache
+    const categorisedItems = extracted.items.map(item => {
+      const key = normaliseItemName(item.name);
+      const cached = cache[key];
+      if (cached) {
+        return {
+          ...item,
+          category: cached.category,
+          subcategory: cached.subcategory,
+          from_cache: true
+        };
+      }
+      // Not in cache — use rule-based categorisation
+      const ruledCategory = applyItemRules(item.name);
+      return {
+        ...item,
+        category: ruledCategory.category,
+        subcategory: ruledCategory.subcategory,
+        from_cache: false,
+        needs_category_confirm: true
+      };
+    });
+
+    return { 
+      ...extracted, 
+      merchant_category: merchantCategory, 
+      items: categorisedItems 
+    };
+  };
+
+  const checkDuplicates = async (receipt: Pick<Expense, 'merchant_name' | 'total'>) => {
+    if (!householdId) return [];
+    
+    // Query expenses from last 7 days
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    const q = query(
+      collection(db, "households", householdId, "expenses"),
+      where("createdAt", ">=", Timestamp.fromDate(sevenDaysAgo)),
+      orderBy("createdAt", "desc")
+    );
+    
+    const recentSnap = await getDocs(q);
+    const duplicates: any[] = [];
+    
+    recentSnap.forEach(doc => {
+      const existing = doc.data();
+      // Duplicate if: same merchant AND total within $0.50 AND within 7 days
+      const sameMerchant = existing.merchant_name?.toLowerCase() === receipt.merchant_name?.toLowerCase();
+      const similarTotal = Math.abs(existing.total - receipt.total) < 0.50;
+      if (sameMerchant && similarTotal) {
+        duplicates.push({ id: doc.id, ...existing });
+      }
+    });
+    
+    return duplicates;
+  };
+
+  const uploadPhotoInBackground = async (file: File, expenseId: string) => {
+    if (!householdId) return;
+    try {
+      const storageRef = ref(storage, `households/${householdId}/receipts/${expenseId}_receipt.jpg`);
+      const uploadResult = await uploadBytes(storageRef, file);
+      const url = await getDownloadURL(uploadResult.ref);
+      await updateDoc(doc(db, "households", householdId, "expenses", expenseId), {
+        receiptURL: url
+      });
+    } catch (err) {
+      console.error("Background upload failed:", err);
+    }
+  };
+
+  const showToast = (message: string) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast(message);
+    toastTimerRef.current = setTimeout(() => setToast(null), 4000);
+  };
+
+  const saveToCategoryCache = async (itemName: string, category: string, subcategory: string, merchantCategory: string) => {
+    if (!householdId) return;
+    const key = normaliseItemName(itemName);
+    await setDoc(
+      doc(db, "households", householdId, "categoryCache", key),
+      {
+        item_name: key,
+        category,
+        subcategory,
+        merchant_category: merchantCategory,
+        last_used: serverTimestamp(),
+        use_count: increment(1)
+      },
+      { merge: true }
+    );
+  };
+
+  // --- Computed State ---
+  const filteredExpenses = useMemo(() => {
+    if (!searchQuery) return expenses;
+    const lower = searchQuery.toLowerCase();
+    return expenses.filter(e => 
+      e.merchant_name.toLowerCase().includes(lower) ||
+      e.items.some(item => item.name.toLowerCase().includes(lower))
+    );
   }, [expenses, searchQuery]);
 
-  // Top purchased items (all time)
-  const topItems = useMemo(() => {
-    const counts: Record<string, { count: number; total: number; avg: number; last: Date }> = {};
-    for (const e of expenses) {
-      for (const item of e.lineItems) {
-        if (!counts[item.name]) counts[item.name] = { count: 0, total: 0, avg: 0, last: new Date(0) };
-        counts[item.name].count++;
-        counts[item.name].total += item.price;
-        if (e.date > counts[item.name].last) counts[item.name].last = e.date;
-      }
+  const itemInsights = useMemo(() => {
+    if (!searchQuery || searchQuery.length < 2) return null;
+    const lower = searchQuery.toLowerCase();
+    
+    // Search across ALL line items in ALL expenses
+    const results: any[] = [];
+    expenses.forEach(expense => {
+      expense.items?.forEach(item => {
+        if (item.name.toLowerCase().includes(lower)) {
+          results.push({
+            ...item,
+            merchant: expense.merchant_name,
+            date: expense.date,
+            expenseId: expense.id
+          });
+        }
+      });
+    });
+
+    if (results.length === 0) return null;
+
+    const totalQty = results.reduce((sum, i) => sum + (i.quantity || 1), 0);
+    const totalSpend = results.reduce((sum, i) => sum + (i.total_price || 0), 0);
+    const avgPrice = totalSpend / totalQty;
+    const avgPricePerUnit = totalSpend / results.length;
+
+    // Price trend — compare last 3 vs first 3 purchases
+    const sorted = [...results].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    const oldAvg = sorted.slice(0, 3).reduce((s, i) => s + i.unit_price, 0) / Math.min(sorted.length, 3);
+    const newAvg = sorted.slice(-3).reduce((s, i) => s + i.unit_price, 0) / Math.min(sorted.length, 3);
+    const trend = newAvg > oldAvg ? "up" : newAvg < oldAvg ? "down" : "stable";
+
+    return { totalQty, totalSpend, avgPrice, avgPricePerUnit, trend, count: results.length };
+  }, [expenses, searchQuery]);
+
+  const renderStatusIcon = (status: Expense["status"]) => {
+    switch (status) {
+      case "processing":
+        return <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />;
+      case "needs_review":
+        return <div className="w-2 h-2 rounded-full bg-amber-500" />;
+      case "failed":
+        return <div className="w-2 h-2 rounded-full bg-red-500" />;
+      default:
+        return null;
     }
-    return Object.entries(counts)
-      .map(([name, data]) => ({ name, ...data, avg: data.total / data.count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 5);
-  }, [expenses]);
+  };
+  const handleConfirmReceipt = async () => {
+    if (!householdId || !receiptData) return;
+    setIsSaving(true);
 
-  // Count-up hook values
-  const displayTotal = useCurrencyCountUp(totalSpent, 0, !loading);
-  const displayBudget = formatAUD(monthlyBudget);
-  const budgetPct = monthlyBudget > 0 ? (totalSpent / monthlyBudget) * 100 : 0;
+    try {
+      // 1. Update status to confirmed
+      await updateDoc(doc(db, "households", householdId, "expenses", receiptData.id), {
+        status: "confirmed",
+        items: receiptData.items.map(item => ({ ...item, needs_category_confirm: false }))
+      });
 
-  const handleDeleteExpense = async (id: string) => {
-    if (!householdId) return;
-    if (!window.confirm('Delete this receipt?')) return;
-    await deleteDoc(doc(db, `households/${householdId}/expenses`, id));
-    haptic.light();
+      // 2. Save categories to cache
+      for (const item of receiptData.items) {
+        await saveToCategoryCache(item.name, item.category, item.subcategory, receiptData.merchant_category);
+      }
+
+      setIsReviewSheetOpen(false);
+      setReceiptData(null);
+      showToast("Receipt confirmed and categories cached ✨");
+      confetti({
+        particleCount: 100,
+        spread: 70,
+        origin: { y: 0.6 },
+        colors: ['#B8955A', '#1A1A1A', '#EDE8DF']
+      });
+    } catch (err) {
+      console.error("Confirmation failed:", err);
+      showToast("Failed to confirm receipt");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  if (!householdId) return null;
+  const handleResolveDuplicate = async (action: "keep_new" | "keep_existing" | "keep_both") => {
+    if (!householdId || !receiptData) return;
+    
+    try {
+      if (action === "keep_existing") {
+        await deleteDoc(doc(db, "households", householdId, "expenses", receiptData.id));
+        setIsReviewSheetOpen(false);
+        setReceiptData(null);
+        showToast("Duplicate removed");
+      } else if (action === "keep_new") {
+        for (const dupId of receiptData.duplicateIds || []) {
+          await deleteDoc(doc(db, "households", householdId, "expenses", dupId));
+        }
+        await handleConfirmReceipt();
+      } else {
+        await handleConfirmReceipt();
+      }
+    } catch (err) {
+      console.error("Duplicate resolution failed:", err);
+    }
+  };
+
+  const handleDeleteExpense = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!householdId) return;
+    if (!confirm("Are you sure you want to delete this receipt?")) return;
+
+    try {
+      await deleteDoc(doc(db, "households", householdId, "expenses", id));
+      showToast("Receipt deleted");
+    } catch (err) {
+      console.error("Delete failed:", err);
+    }
+  };
+
+  // --- Render ---
 
   return (
-    <div
-      style={{
-        height: 'calc(100dvh - 76px)',
-        overflowY: 'auto',
-        overflowX: 'hidden',
-        background: colors.linen,
-        paddingBottom: 'calc(32px + env(safe-area-inset-bottom))',
-      }}
-      className="relative no-scrollbar"
-    >
-      {/* Header */}
-      <div className="px-5 pt-14 pb-4">
-        <div className="flex items-center justify-between">
-          <h1 className="font-serif text-[32px] font-light text-[#1A1A1A]">Finances</h1>
-          <div className="flex items-center gap-2">
-            <motion.button
-              whileTap={{ scale: 0.92 }}
-              onClick={() => setShowMenu(true)}
-              className="w-10 h-10 rounded-full bg-[#EDE8DF] flex items-center justify-center border border-[#D4CEC4]"
-            >
-              <MoreHorizontal size={18} className="text-[#1A1A1A]" />
-            </motion.button>
-          </div>
-        </div>
-
-        {/* Month nav */}
-        <div className="flex items-center gap-4 mt-2">
-          <motion.button whileTap={{ scale: 0.9 }} onClick={() => setViewMonth(m => subMonths(m, 1))}>
-            <ChevronLeft size={20} className="text-[#6B6560]" />
-          </motion.button>
-          <span className="font-outfit text-[14px] text-[#1A1A1A] font-medium">
-            {format(viewMonth, 'MMMM yyyy')}
-          </span>
-          <motion.button
-            whileTap={{ scale: 0.9 }}
-            onClick={() => setViewMonth(m => addMonths(m, 1))}
-            disabled={viewMonth >= new Date()}
+    <div style={{ 
+      minHeight: "100dvh", 
+      background: "#F8F4EE", 
+      paddingBottom: "120px",
+      position: "relative"
+    }}>
+      {/* Toast Notification */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 50 }}
+            className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[10001] px-6 py-3 bg-gray-900 text-white text-sm font-medium rounded-full shadow-2xl flex items-center gap-3 whitespace-nowrap"
           >
-            <ChevronRight size={20} className={viewMonth >= new Date() ? 'text-[#D4CEC4]' : 'text-[#6B6560]'} />
-          </motion.button>
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <div className="px-5 mb-4">
-        <div className="flex gap-0 bg-[#EDE8DF] rounded-2xl p-1">
-          {(['overview', 'explorer', 'analytics'] as const).map(tab => (
-            <motion.button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`flex-1 py-2.5 rounded-xl font-outfit text-[13px] transition-colors relative ${
-                activeTab === tab ? 'text-[#1A1A1A] font-semibold' : 'text-[#6B6560]'
-              }`}
-            >
-              {activeTab === tab && (
-                <motion.div
-                  layoutId="finance-tab-indicator"
-                  className="absolute inset-0 bg-[#fcf9f4] rounded-xl shadow-sm"
-                  transition={SPRING_DEFAULT}
-                />
-              )}
-              <span className="relative z-10 capitalize">{tab}</span>
-            </motion.button>
-          ))}
-        </div>
-      </div>
-
-      <AnimatePresence mode="wait">
-
-        {/* ============ TAB 1: OVERVIEW ============ */}
-        {activeTab === 'overview' && (
-          <motion.div key="overview" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}>
-
-            {/* Hero Card */}
-            <div className="px-5 mb-4">
-              <div className="bg-[#1A1A1A] rounded-[28px] p-6 relative overflow-hidden">
-                {/* Aurora effect */}
-                <div className="absolute inset-0 opacity-10 pointer-events-none">
-                  <div className="absolute top-0 right-0 w-48 h-48 rounded-full bg-[#B8955A] blur-3xl" />
-                  <div className="absolute bottom-0 left-0 w-32 h-32 rounded-full bg-[#C47B6A] blur-2xl" />
-                </div>
-
-                <div className="relative z-10">
-                  <p className="font-outfit text-[11px] uppercase tracking-[2.5px] text-[#B8955A] mb-1">
-                    {format(viewMonth, 'MMMM yyyy')} · Spent
-                  </p>
-                  <p className="font-serif text-[48px] font-light text-white leading-none tracking-[-2px]">
-                    {loading ? '...' : displayTotal}
-                  </p>
-                  <p className="font-outfit text-[13px] text-white/50 mt-1">
-                    / {displayBudget} budget
-                  </p>
-
-                  {/* Budget bar */}
-                  <div className="mt-4 h-1.5 bg-white/10 rounded-full overflow-hidden">
-                    <motion.div
-                      initial={{ width: 0 }}
-                      animate={{ width: `${Math.min(budgetPct, 100)}%` }}
-                      transition={{ duration: 1.2, ease: [0.16, 1, 0.3, 1], delay: 0.3 }}
-                      className="h-full rounded-full"
-                      style={{ background: budgetHealth.color }}
-                    />
-                  </div>
-
-                  {/* Mini stats */}
-                  <div className="grid grid-cols-3 gap-4 mt-4">
-                    <div>
-                      <p className="font-outfit text-[10px] text-white/40 uppercase tracking-wider">Daily avg</p>
-                      <p className="font-serif text-[16px] text-white">{formatCompact(totalSpent / Math.max(new Date().getDate(), 1))}</p>
-                    </div>
-                    <div>
-                      <p className="font-outfit text-[10px] text-white/40 uppercase tracking-wider">Receipts</p>
-                      <p className="font-serif text-[16px] text-white">{monthExpenses.length}</p>
-                    </div>
-                    <div>
-                      <p className="font-outfit text-[10px] text-white/40 uppercase tracking-wider">Health</p>
-                      <p className="font-serif text-[16px]" style={{ color: budgetHealth.color }}>{budgetHealth.score}</p>
-                    </div>
-                  </div>
-
-                  {/* Cash flow (if income data) */}
-                  {monthIncome > 0 && (
-                    <div className="mt-4 pt-4 border-t border-white/10 flex items-center justify-between">
-                      <span className="font-outfit text-[12px] text-white/50">Income</span>
-                      <span className="font-outfit text-[13px] text-[#4CAF50]">{formatAUD(monthIncome)}</span>
-                      <span className="font-outfit text-[12px] text-white/50">Saved</span>
-                      <span className={`font-outfit text-[13px] ${monthIncome > totalSpent ? 'text-[#4CAF50]' : 'text-[#C47B6A]'}`}>
-                        {formatAUD(Math.abs(monthIncome - totalSpent))}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Category Donut */}
-            {categoryTotals.length > 0 && (
-              <div className="px-5 mb-4">
-                <div className="bg-[#EDE8DF] border border-[#D4CEC4] rounded-[22px] p-5">
-                  <p className="font-outfit text-[11px] uppercase tracking-[2.5px] text-[#B8955A] mb-4">By Category</p>
-                  <div className="flex items-center gap-4">
-                    <div className="flex-shrink-0">
-                      <DonutChart data={donutData} total={totalSpent} onSliceClick={setDrillDownCat} />
-                      <p className="font-outfit text-[10px] text-[#6B6560] text-center mt-1">tap to explore</p>
-                    </div>
-                    <div className="flex-1 space-y-2.5 overflow-hidden">
-                      {categoryTotals.slice(0, 5).map(ct => (
-                        <motion.button
-                          key={ct.category}
-                          whileTap={{ scale: 0.97 }}
-                          onClick={() => setDrillDownCat(ct.category)}
-                          className="w-full flex items-center gap-2 text-left"
-                        >
-                          <span className="text-[14px] flex-shrink-0">{ct.emoji}</span>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center justify-between">
-                              <span className="font-outfit text-[12px] text-[#1A1A1A] truncate">{ct.label}</span>
-                              <span className="font-outfit text-[12px] text-[#6B6560] flex-shrink-0 ml-1">{formatCompact(ct.amount)}</span>
-                            </div>
-                            <div className="mt-1 h-1 bg-[#D4CEC4] rounded-full overflow-hidden">
-                              <div
-                                className="h-full rounded-full"
-                                style={{ width: `${totalSpent > 0 ? (ct.amount / totalSpent) * 100 : 0}%`, background: ct.color }}
-                              />
-                            </div>
-                          </div>
-                        </motion.button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Weekly bars */}
-            {weeklyTotals.length > 1 && (
-              <div className="px-5 mb-4">
-                <div className="bg-[#EDE8DF] border border-[#D4CEC4] rounded-[22px] p-5">
-                  <p className="font-outfit text-[11px] uppercase tracking-[2.5px] text-[#B8955A] mb-3">Weekly Spend</p>
-                  <WeeklyBarChart weeklyTotals={weeklyTotals} />
-                  <div className="flex justify-between mt-1">
-                    {weeklyTotals.map((_, i) => (
-                      <span key={i} className="font-outfit text-[10px] text-[#6B6560]">Wk {i+1}</span>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Empty state */}
-            {monthExpenses.length === 0 && !loading && (
-              <div className="flex flex-col items-center justify-center py-16 px-8 text-center">
-                <div className="w-16 h-16 rounded-full bg-[#EDE8DF] flex items-center justify-center mb-4 text-[28px]">🧾</div>
-                <h3 className="font-serif text-[20px] text-[#1A1A1A] mb-2">No expenses yet</h3>
-                <p className="font-outfit text-[13px] text-[#6B6560]">Scan a receipt to get started</p>
-              </div>
-            )}
-          </motion.div>
-        )}
-
-        {/* ============ TAB 2: EXPLORER ============ */}
-        {activeTab === 'explorer' && (
-          <motion.div key="explorer" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}>
-
-            {/* Search */}
-            <div className="px-5 mb-4">
-              <div className="flex items-center gap-3 bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl px-4 h-12">
-                <Search size={16} className="text-[#6B6560] flex-shrink-0" />
-                <input
-                  type="text"
-                  placeholder="Search items, receipts, merchants..."
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  className="flex-1 bg-transparent border-none focus:ring-0 font-outfit text-[14px] text-[#1A1A1A] placeholder-[#A8A29E]"
-                />
-                {searchQuery && (
-                  <button onClick={() => setSearchQuery('')}>
-                    <X size={14} className="text-[#6B6560]" />
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Results */}
-            {loading ? (
-              <div className="flex items-center justify-center py-16">
-                <Loader2 size={32} className="text-[#B8955A] animate-spin" />
-              </div>
-            ) : (
-              <div className="px-5 space-y-3">
-                {filteredExpenses.map(exp => (
-                  <ReceiptCard
-                    key={exp.id}
-                    expense={exp}
-                    isExpanded={expandedId === exp.id}
-                    onToggle={() => setExpandedId(expandedId === exp.id ? null : exp.id)}
-                    onDelete={() => handleDeleteExpense(exp.id)}
-                    currentUserId={user?.uid || ''}
-                    partnerData={partnerData}
-                  />
-                ))}
-
-                {filteredExpenses.length === 0 && (
-                  <div className="text-center py-12">
-                    <p className="font-outfit text-[14px] text-[#6B6560]">No receipts found</p>
-                  </div>
-                )}
-              </div>
-            )}
-          </motion.div>
-        )}
-
-        {/* ============ TAB 3: ANALYTICS ============ */}
-        {activeTab === 'analytics' && (
-          <motion.div key="analytics" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}>
-
-            {/* Item search */}
-            <div className="px-5 mb-5">
-              <div className="flex items-center gap-3 bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl px-4 h-14">
-                <Search size={18} className="text-[#6B6560]" />
-                <input
-                  type="text"
-                  placeholder="Search everything you've ever bought..."
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  className="flex-1 bg-transparent border-none focus:ring-0 font-outfit text-[15px] text-[#1A1A1A] placeholder-[#A8A29E]"
-                />
-                {searchQuery && <button onClick={() => setSearchQuery('')}><X size={14} /></button>}
-              </div>
-
-              {/* Item search results */}
-              <AnimatePresence>
-                {itemSearchResults.length > 0 && (
-                  <motion.div
-                    initial={{ opacity: 0, y: -8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    className="mt-2 space-y-2"
-                  >
-                    {itemSearchResults.map((item, i) => (
-                      <div key={i} className="flex items-center gap-3 p-3 bg-[#EDE8DF] rounded-xl border border-[#D4CEC4]">
-                        <div className="flex-1 min-w-0">
-                          <p className="font-outfit text-[13px] font-medium text-[#1A1A1A] truncate">{item.name}</p>
-                          <p className="font-outfit text-[11px] text-[#6B6560]">{item.merchant} · {format(item.date, 'd MMM yyyy')}</p>
-                        </div>
-                        <p className="font-outfit text-[13px] text-[#1A1A1A]">{formatAUD(item.price)}</p>
-                      </div>
-                    ))}
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-
-            {/* Top purchased */}
-            {topItems.length > 0 && (
-              <div className="px-5 mb-5">
-                <p className="font-outfit text-[11px] uppercase tracking-[2.5px] text-[#B8955A] mb-3">Most Purchased — All Time</p>
-                <div className="space-y-3">
-                  {topItems.map((item, i) => (
-                    <div key={item.name} className="flex items-center gap-3 p-4 bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl">
-                      <span className="font-serif text-[28px] text-[#B8955A] w-8 text-center leading-none">{i + 1}</span>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-outfit text-[14px] font-medium text-[#1A1A1A] truncate">{item.name}</p>
-                        <p className="font-outfit text-[12px] text-[#6B6560]">{item.count}× · avg {formatAUD(item.avg)}</p>
-                        <div className="mt-1.5 h-1 bg-[#D4CEC4] rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-[#B8955A] rounded-full"
-                            style={{ width: `${(item.count / (topItems[0]?.count || 1)) * 100}%` }}
-                          />
-                        </div>
-                      </div>
-                      <p className="font-outfit text-[13px] text-[#6B6560]">{formatAUD(item.total)}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* ML Forecasts */}
-            {categoryForecasts.length > 0 && (
-              <div className="px-5 mb-5">
-                <p className="font-outfit text-[11px] uppercase tracking-[2.5px] text-[#B8955A] mb-3">3-Month Forecast</p>
-                <div className="space-y-3">
-                  {categoryForecasts.slice(0, 5).map(cf => {
-                    const catDef = getCategoryDef(cf.category);
-                    const nextMonth = cf.forecasts[0] || 0;
-                    const TrendIcon = cf.trend === 'increasing' ? TrendingUp : cf.trend === 'decreasing' ? TrendingDown : Minus;
-                    const trendColor = cf.trend === 'increasing' ? '#C47B6A' : cf.trend === 'decreasing' ? '#4CAF50' : '#6B6560';
-                    return (
-                      <div key={cf.category} className="p-4 bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <span className="text-[16px]">{catDef.emoji}</span>
-                            <span className="font-outfit text-[14px] font-medium text-[#1A1A1A]">{catDef.label}</span>
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <TrendIcon size={14} style={{ color: trendColor }} />
-                            <span className="font-outfit text-[12px]" style={{ color: trendColor }}>
-                              {cf.trend}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between mt-2">
-                          <p className="font-outfit text-[12px] text-[#6B6560]">Predicted next month</p>
-                          <p className="font-serif text-[18px] text-[#1A1A1A]">{formatAUD(nextMonth)}</p>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {expenses.length === 0 && (
-              <div className="flex flex-col items-center py-16 text-center px-8">
-                <div className="text-[40px] mb-4">📊</div>
-                <h3 className="font-serif text-[20px] text-[#1A1A1A] mb-2">No data yet</h3>
-                <p className="font-outfit text-[13px] text-[#6B6560]">Scan some receipts to see analytics</p>
-              </div>
-            )}
+            <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+            {toast}
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Hidden Inputs */}
+      <input 
+        type="file" 
+        accept="image/*" 
+        capture="environment" 
+        ref={cameraInputRef} 
+        onChange={handleFileChange} 
+        className="hidden" 
+      />
+      <input 
+        type="file" 
+        accept="image/*" 
+        ref={galleryInputRef} 
+        onChange={handleFileChange} 
+        className="hidden" 
+      />
+
+      {/* Hero Section — Spend Progress */}
+      <motion.div 
+        initial={{ opacity: 0, y: 32, filter: "blur(4px)" }}
+        animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+        transition={{ type: "spring", stiffness: 100, damping: 20 }}
+        style={{ padding: "40px 24px 24px" }}
+      >
+        <div style={{ 
+          background: "#EDE8DF", 
+          border: "1px solid #D4CEC4", 
+          borderRadius: "24px", 
+          padding: "28px", 
+          color: "#1A1A1A",
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+            <p style={{ fontFamily: "'Outfit'", fontSize: "11px", textTransform: "uppercase", letterSpacing: "2px", color: "#B8955A", fontWeight: 600 }}>
+              {format(new Date(), 'MMMM yyyy').toUpperCase()}
+            </p>
+            <div style={{ background: "#F8F4EE", border: "1px solid #D4CEC4", padding: "4px 12px", borderRadius: "999px", fontSize: "11px", fontFamily: "'Outfit'", fontWeight: 600, color: "#6B6560" }}>
+              Month
+            </div>
+          </div>
+          
+          <div style={{ marginBottom: "8px", overflow: "hidden" }}>
+            <span 
+              ref={amountRef}
+              style={{ fontFamily: "'Fraunces'", fontSize: "72px", fontWeight: 300, letterSpacing: "-3px", display: "inline-block" }}
+            >
+              ${totalMonthlySpend.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </span>
+          </div>
+          
+          <p style={{ fontFamily: "'Outfit'", fontSize: "16px", color: "#6B6560" }}>
+            / $3,000 budget
+          </p>
+
+          <div style={{ height: "4px", background: "#D4CEC4", borderRadius: "999px", overflow: "hidden", margin: "20px 0 8px" }}>
+            <motion.div 
+              initial={{ width: 0 }}
+              animate={{ width: `${spendPercentage}%` }}
+              transition={{ duration: 1.5, ease: "easeOut" }}
+              style={{ height: "100%", background: "#B8955A" }}
+            />
+          </div>
+          <p style={{ fontFamily: "'Outfit'", fontSize: "12px", color: "#6B6560" }}>
+            {spendPercentage.toFixed(0)}% of monthly budget
+          </p>
+        </div>
+      </motion.div>
+
+      {/* Category breakdown */}
+      <div style={{ marginBottom: "32px" }}>
+        <div className="px-6 mb-4">
+          <h2 style={{ fontFamily: "'Outfit'", fontSize: "11px", fontWeight: 600, color: "#B8955A", textTransform: "uppercase", letterSpacing: "2px" }}>By Category</h2>
+        </div>
+        <div style={{ 
+          display: "flex", 
+          overflowX: "auto", 
+          gap: "12px", 
+          padding: "0 24px",
+          scrollSnapType: "x mandatory"
+        }} className="no-scrollbar">
+          {categoryBreakdown.map(cat => {
+            const Icon = cat.icon;
+            return (
+              <motion.div 
+                key={cat.id}
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                style={{ 
+                  background: "#EDE8DF", 
+                  border: "1px solid #D4CEC4", 
+                  borderRadius: "20px", 
+                  padding: "20px", 
+                  minWidth: "140px",
+                  scrollSnapAlign: "start"
+                }}
+              >
+                <div style={{ marginBottom: "12px" }}>
+                  <Icon size={28} color="#B8955A" strokeWidth={1.5} />
+                </div>
+                <p style={{ fontFamily: "'Outfit'", fontSize: "12px", color: "#6B6560", textTransform: "uppercase", marginBottom: "8px", fontWeight: 600 }}>{cat.name}</p>
+                <p style={{ fontFamily: "'Fraunces'", fontSize: "28px", fontWeight: 400, color: "#1A1A1A", margin: 0 }}>${cat.total.toLocaleString()}</p>
+              </motion.div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Search Bar */}
+      <div className="px-6 mb-8">
+        <div className="relative group">
+          <div className="absolute left-4 top-1/2 -translate-y-1/2">
+            <Search size={16} color="#D4CEC4" />
+          </div>
+          <input
+            placeholder="Search items — milk, chicken..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className="focus:border-[#B8955A] transition-colors"
+            style={{
+              width: "100%", height: "48px",
+              background: "#EDE8DF", border: "1px solid #D4CEC4",
+              borderRadius: "999px", padding: "0 16px 0 44px",
+              fontFamily: "'Outfit'", fontSize: "14px", color: "#1A1A1A",
+              outline: "none", caretColor: "#B8955A",
+              fontStyle: "italic"
+            }}
+          />
+          {searchQuery && (
+            <button 
+              onClick={() => setSearchQuery("")}
+              className="absolute right-4 top-1/2 -translate-y-1/2 p-1 hover:bg-gray-200 rounded-full transition-colors"
+            >
+              <X className="w-4 h-4 text-gray-400" />
+            </button>
+          )}
+        </div>
+
+        {itemInsights && (
+          <motion.div 
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mt-4 p-6 bg-[#EDE8DF] rounded-[32px] border border-[#D4CEC4] shadow-sm"
+          >
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-[#F8F4EE] flex items-center justify-center text-[#B8955A]">
+                  <TrendingUp className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 style={{ fontFamily: "'Fraunces'", fontSize: "18px", color: "#1A1A1A" }}>Item Insights</h4>
+                  <p style={{ fontFamily: "'Outfit'", fontSize: "12px", color: "#6B6560" }}>Based on {itemInsights.count} purchases</p>
+                </div>
+              </div>
+              <div className={`px-3 py-1 rounded-full flex items-center gap-1.5 ${
+                itemInsights.trend === "up" ? "bg-red-50 text-red-600" : 
+                itemInsights.trend === "down" ? "bg-green-50 text-green-600" : 
+                "bg-gray-50 text-gray-500"
+              }`}>
+                <span className="text-xs font-bold uppercase tracking-wider font-outfit">
+                  {itemInsights.trend === "up" ? "Rising" : itemInsights.trend === "down" ? "Falling" : "Stable"}
+                </span>
+                <span>{itemInsights.trend === "up" ? "📈" : itemInsights.trend === "down" ? "📉" : "↔️"}</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="p-4 bg-[#F8F4EE] rounded-2xl">
+                <p style={{ fontFamily: "'Outfit'", fontSize: "10px", color: "#B8955A", fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", marginBottom: "4px" }}>Total Quantity</p>
+                <p style={{ fontFamily: "'Fraunces'", fontSize: "20px", color: "#1A1A1A" }}>{itemInsights.totalQty} units</p>
+              </div>
+              <div className="p-4 bg-[#F8F4EE] rounded-2xl">
+                <p style={{ fontFamily: "'Outfit'", fontSize: "10px", color: "#B8955A", fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", marginBottom: "4px" }}>Total Spend</p>
+                <p style={{ fontFamily: "'Fraunces'", fontSize: "20px", color: "#1A1A1A" }}>${itemInsights.totalSpend.toFixed(2)}</p>
+              </div>
+              <div className="p-4 bg-[#F8F4EE] rounded-2xl col-span-2">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <p style={{ fontFamily: "'Outfit'", fontSize: "10px", color: "#B8955A", fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", marginBottom: "4px" }}>Average Price</p>
+                    <p style={{ fontFamily: "'Fraunces'", fontSize: "20px", color: "#1A1A1A" }}>${itemInsights.avgPrice.toFixed(2)} <span className="text-xs font-outfit text-gray-400">/ unit</span></p>
+                  </div>
+                  <div className="text-right">
+                    <p style={{ fontFamily: "'Outfit'", fontSize: "10px", color: "#B8955A", fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", marginBottom: "4px" }}>Per Purchase</p>
+                    <p style={{ fontFamily: "'Fraunces'", fontSize: "20px", color: "#1A1A1A" }}>${itemInsights.avgPricePerUnit.toFixed(2)}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </div>
+
+      {/* Recent Receipts */}
+      <div className="px-6 space-y-4">
+        <div className="flex items-center justify-between mb-2">
+          <h2 style={{ fontFamily: "'Outfit'", fontSize: "11px", fontWeight: 600, color: "#B8955A", textTransform: "uppercase", letterSpacing: "2px" }}>
+            {searchQuery ? "Search Results" : "Recent Receipts"}
+          </h2>
+          {searchQuery && (
+            <span className="text-[10px] font-bold text-gray-400">{filteredExpenses.length} found</span>
+          )}
+        </div>
+
+        {isLoading ? (
+          <div className="flex flex-col items-center justify-center py-20 gap-4">
+            <Loader2 className="animate-spin text-[#B8955A]" size={32} />
+            <p className="text-sm font-medium text-gray-400">Loading your finances...</p>
+          </div>
+        ) : filteredExpenses.length === 0 ? (
+          <div className="text-center py-20 bg-[#EDE8DF] rounded-[32px] border border-dashed border-[#D4CEC4]">
+            <div className="flex justify-center mb-4">
+              <Receipt size={48} color="#D4CEC4" strokeWidth={1} />
+            </div>
+            <h3 style={{ fontFamily: "'Fraunces'", fontSize: "22px", color: "#1A1A1A", marginBottom: "4px" }}>No receipts yet</h3>
+            <p style={{ fontFamily: "'Outfit'", fontSize: "14px", color: "#6B6560" }}>Tap + to scan your first receipt</p>
+          </div>
+        ) : (
+          <AnimatePresence mode="popLayout">
+            {filteredExpenses.map((exp, index) => {
+              const Icon = categoryIcons[exp.merchant_category] || MoreHorizontal;
+              return (
+                <motion.div
+                  layout
+                  key={exp.id}
+                  initial={{ opacity: 0, y: 32, filter: "blur(4px)" }}
+                  animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  transition={{ delay: index * 0.06, type: "spring", stiffness: 100, damping: 20 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => {
+                    if (exp.status === "processing") return;
+                    if (exp.status === "needs_review") {
+                      setReceiptData(exp);
+                      setIsReviewSheetOpen(true);
+                    } else {
+                      setExpandedReceiptId(expandedReceiptId === exp.id ? null : exp.id);
+                    }
+                  }}
+                  className="w-full"
+                >
+                  {exp.status === "processing" ? (
+                    <div style={{ background: "#EDE8DF", border: "1px solid #D4CEC4", borderRadius: "20px", padding: "20px", opacity: 0.7, marginBottom: "12px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                        <motion.div
+                          animate={{ opacity: [0.4, 1, 0.4] }}
+                          transition={{ duration: 1.5, repeat: Infinity }}
+                          style={{ width: "52px", height: "52px", borderRadius: "14px", background: "#F8F4EE" }}
+                        />
+                        <div>
+                          <p style={{ fontFamily: "'Fraunces'", fontSize: "20px", color: "#6B6560", margin: 0 }}>Scanning receipt...</p>
+                          <p style={{ fontFamily: "'Outfit'", fontSize: "12px", color: "#D4CEC4", margin: 0 }}>Processing in background</p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : exp.status === "failed" ? (
+                    <div 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                      }}
+                      style={{ background: "#F5E6E0", border: "1px solid #C97B6A", borderRadius: "20px", padding: "20px", marginBottom: "12px" }}
+                    >
+                      <p style={{ fontFamily: "'Outfit'", fontSize: "14px", color: "#C97B6A", margin: 0 }}>Scan failed — tap to retry</p>
+                    </div>
+                  ) : (
+                    <div style={{ position: "relative", marginBottom: "12px" }}>
+                      {/* Status dots */}
+                      {exp.status === "needs_review" && (
+                        <div style={{
+                          position: "absolute", top: "20px", right: "20px",
+                          width: "8px", height: "8px",
+                          borderRadius: "50%", background: exp.duplicateIds && exp.duplicateIds.length > 0 ? "#C97B6A" : "#B8955A",
+                          zIndex: 10
+                        }} />
+                      )}
+                      
+                      <div style={{ 
+                        background: "#EDE8DF", 
+                        border: "1px solid #D4CEC4", 
+                        borderRadius: "20px", 
+                        padding: "20px",
+                        cursor: "pointer"
+                      }}>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-4">
+                            <div style={{ width: "52px", height: "52px", background: "#F8F4EE", borderRadius: "14px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                              <Icon size={24} color="#B8955A" strokeWidth={1.5} />
+                            </div>
+                            <div>
+                              <h3 style={{ fontFamily: "'Fraunces'", fontSize: "20px", fontWeight: 400, color: "#1A1A1A", margin: "0 0 2px" }}>{exp.merchant_name}</h3>
+                              <div className="flex items-center gap-2">
+                                <span style={{ fontFamily: "'Outfit'", fontSize: "12px", color: "#6B6560" }}>{exp.date}</span>
+                                <span style={{ fontFamily: "'Outfit'", fontSize: "12px", color: "#B8955A", fontWeight: 600 }}>{exp.items.length} items</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <p style={{ fontFamily: "'Fraunces'", fontSize: "22px", color: "#1A1A1A", margin: 0 }}>${exp.total.toFixed(2)}</p>
+                          </div>
+                        </div>
+
+                        <AnimatePresence>
+                          {expandedReceiptId === exp.id && (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: "auto", opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              className="overflow-hidden"
+                            >
+                              <div className="pt-6 mt-6 border-t border-[#D4CEC4] space-y-3">
+                                {exp.items.map((item, idx) => (
+                                  <div key={idx} className="flex justify-between items-start gap-4">
+                                    <div className="flex-1">
+                                      <p style={{ fontFamily: "'Outfit'", fontSize: "14px", fontWeight: 600, color: "#1A1A1A", margin: 0 }}>{item.name}</p>
+                                      <p style={{ fontFamily: "'Outfit'", fontSize: "10px", fontWeight: 700, color: "#6B6560", textTransform: "uppercase", letterSpacing: "1px" }}>
+                                        {item.quantity > 1 && `${item.quantity}x `}{item.category} • {item.subcategory}
+                                      </p>
+                                    </div>
+                                    <span style={{ fontFamily: "'Fraunces'", fontSize: "14px", color: "#1A1A1A" }}>${item.total_price.toFixed(2)}</span>
+                                  </div>
+                                ))}
+                                
+                                <div className="pt-4 flex items-center justify-between">
+                                  <button 
+                                    onClick={(e) => handleDeleteExpense(exp.id, e)}
+                                    style={{ fontFamily: "'Outfit'", fontSize: "10px", fontWeight: 700, color: "#C97B6A", textTransform: "uppercase", letterSpacing: "1px", background: "none", border: "none", cursor: "pointer" }}
+                                  >
+                                    Delete Entry
+                                  </button>
+                                  {exp.receiptURL && (
+                                    <button 
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        window.open(exp.receiptURL, '_blank');
+                                      }}
+                                      style={{ 
+                                        padding: "8px 16px", 
+                                        background: "#1A1A1A", 
+                                        color: "#FFFFFF", 
+                                        borderRadius: "12px", 
+                                        fontFamily: "'Outfit'", 
+                                        fontSize: "10px", 
+                                        fontWeight: 700, 
+                                        textTransform: "uppercase", 
+                                        letterSpacing: "1px",
+                                        border: "none",
+                                        cursor: "pointer"
+                                      }}
+                                    >
+                                      View Receipt
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    </div>
+                  )}
+                </motion.div>
+              );
+            })}
+          </AnimatePresence>
+        )}
+      </div>
 
       {/* FAB */}
       <motion.button
-        initial={{ scale: 0 }}
-        animate={{ scale: 1 }}
-        transition={{ ...SPRING_BOUNCY, delay: 0.5 }}
-        whileTap={{ scale: 0.88 }}
-        onClick={() => setShowScanSheet(true)}
+        whileTap={{ scale: 0.92, rotate: 45 }}
+        onClick={() => setIsActionSheetOpen(true)}
         style={{
-          position: 'fixed',
-          bottom: '100px',
-          right: '24px',
-          zIndex: 90,
-          width: '56px',
-          height: '56px',
-          borderRadius: '999px',
-          background: '#1A1A1A',
-          color: '#FFFFFF',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          boxShadow: '0 8px 32px rgba(26,26,26,0.25)',
-          border: 'none',
+          position: "fixed",
+          bottom: "calc(96px + env(safe-area-inset-bottom))",
+          right: "24px",
+          width: "60px",
+          height: "60px",
+          background: "#1A1A1A",
+          color: "#FFFFFF",
+          borderRadius: "50%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          boxShadow: "0 8px 32px rgba(26,26,26,0.2)",
+          zIndex: 100,
+          border: "none",
+          cursor: "pointer"
         }}
       >
         <Plus size={24} />
       </motion.button>
 
-      {/* Menu overlay */}
+      {/* Action Sheet */}
       <AnimatePresence>
-        {showMenu && (
+        {isActionSheetOpen && (
           <>
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[190]"
-              onClick={() => setShowMenu(false)}
+              onClick={() => setIsActionSheetOpen(false)}
+              className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-[9998]"
             />
             <motion.div
-              initial={{ opacity: 0, scale: 0.9, y: -8 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              transition={SPRING_BOUNCY}
-              className="fixed top-20 right-5 z-[200] bg-[#fcf9f4] border border-[#D4CEC4] rounded-2xl shadow-xl overflow-hidden"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", stiffness: 300, damping: 30 }}
+              className="fixed bottom-0 left-0 right-0 z-[9999] bg-[#F8F4EE] rounded-t-[32px] p-6 pb-12 shadow-2xl"
             >
-              {[
-                { label: '📤 Import Bank Statement', action: () => { setShowMenu(false); setShowBankImport(true); } },
-                {
-                  label: '💰 Set Monthly Budget',
-                  action: () => {
-                    const val = prompt('Monthly budget (AUD):', monthlyBudget.toString());
-                    if (val && !isNaN(parseInt(val)) && householdId) {
-                      const num = parseInt(val);
-                      setMonthlyBudget(num);
-                      updateDoc(doc(db, 'households', householdId), {
-                        'budgetSettings.monthlyLimit': num
-                      }).catch(console.error);
-                    }
-                    setShowMenu(false);
-                  }
-                },
-              ].map(item => (
+              <div className="w-12 h-1.5 bg-gray-200 rounded-full mx-auto mb-8" />
+              <div className="grid grid-cols-2 gap-4">
                 <button
-                  key={item.label}
-                  onClick={item.action}
-                  className="w-full px-5 py-3.5 font-outfit text-[14px] text-[#1A1A1A] text-left hover:bg-[#EDE8DF] transition-colors border-b border-[#D4CEC4] last:border-0"
+                  onClick={handleTakePhoto}
+                  className="flex flex-col items-center justify-center gap-4 p-8 bg-white rounded-3xl border border-gray-100 shadow-sm active:scale-95 transition-transform"
                 >
-                  {item.label}
+                  <div className="w-16 h-16 rounded-2xl bg-[#F8F4EE] flex items-center justify-center text-3xl">📸</div>
+                  <span className="font-bold text-gray-900">Take Photo</span>
                 </button>
-              ))}
+                <button
+                  onClick={handleChooseFromLibrary}
+                  className="flex flex-col items-center justify-center gap-4 p-8 bg-white rounded-3xl border border-gray-100 shadow-sm active:scale-95 transition-transform"
+                >
+                  <div className="w-16 h-16 rounded-2xl bg-[#F8F4EE] flex items-center justify-center text-3xl">🖼️</div>
+                  <span className="font-bold text-gray-900">Library</span>
+                </button>
+              </div>
             </motion.div>
           </>
         )}
       </AnimatePresence>
 
-      {/* Scan receipt sheet */}
+      {/* Processing Overlay */}
       <AnimatePresence>
-        {showScanSheet && user && (
-          <ScanReceiptSheet
-            onClose={() => setShowScanSheet(false)}
-            onSaved={() => {}}
-            householdId={householdId}
-            userId={user.uid}
-            userDisplayName={userData?.displayName || user.displayName || 'You'}
-            userPhotoURL={userData?.photoURL || user.photoURL || undefined}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* Bank import */}
-      <AnimatePresence>
-        {showBankImport && (
-          <BankImportFlow
-            onClose={() => setShowBankImport(false)}
-            onImported={(count) => {
-              setShowBankImport(false);
-              if (count > 0) fireCelebration({ x: 0.5, y: 0.8 });
+        {isProcessing && createPortal(
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{
+              position: "fixed", inset: 0,
+              background: "#F8F4EE",
+              zIndex: 10000,
+              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+              padding: "40px"
             }}
-          />
+          >
+            <div className="w-24 h-24 mb-8 relative">
+              <motion.div 
+                animate={{ rotate: 360 }}
+                transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
+                className="absolute inset-0 border-4 border-[#B8955A] border-t-transparent rounded-full"
+              />
+              <div className="absolute inset-0 flex items-center justify-center text-3xl">✨</div>
+            </div>
+            <h2 style={{ fontFamily: "'Fraunces'", fontSize: "24px", color: "#1A1A1A", marginBottom: "12px" }}>Reading Receipt...</h2>
+            <p style={{ fontFamily: "'Outfit'", fontSize: "14px", color: "#6B6560", textAlign: "center" }}>Gemini is extracting items and totals for you.</p>
+          </motion.div>,
+          document.body
         )}
       </AnimatePresence>
 
-      {/* Category drill-down */}
+      {/* Review Sheet */}
       <AnimatePresence>
-        {drillDownCat && (
-          <CategoryDrillDown
-            category={drillDownCat}
-            expenses={expenses}
-            onBack={() => setDrillDownCat(null)}
-          />
+        {isReviewSheetOpen && receiptData && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsReviewSheetOpen(false)}
+              className="fixed inset-0 bg-gray-900/60 backdrop-blur-md z-[9998]"
+            />
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", stiffness: 300, damping: 30 }}
+              className="fixed bottom-0 left-0 right-0 z-[9999] bg-[#F8F4EE] rounded-t-[40px] max-h-[94dvh] flex flex-col shadow-2xl"
+            >
+              <div className="w-12 h-1.5 bg-gray-200 rounded-full mx-auto mt-4 mb-2 flex-shrink-0" />
+              
+              <div className="flex-1 overflow-y-auto px-6 pt-4 pb-32 no-scrollbar">
+                {/* Header */}
+                <div className="text-center mb-8">
+                  {receiptData.receiptURL && (
+                    <div className="w-20 h-20 mx-auto mb-4 rounded-2xl overflow-hidden border border-gray-100 shadow-sm">
+                      <img src={receiptData.receiptURL} alt="Receipt" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                    </div>
+                  )}
+                  <h2 style={{ fontFamily: "'Fraunces'", fontSize: "28px", color: "#1A1A1A", marginBottom: "4px" }}>
+                    {receiptData.merchant_name}
+                  </h2>
+                  <p style={{ fontFamily: "'Outfit'", fontSize: "13px", color: "#B8955A", fontWeight: 600 }}>
+                    {receiptData.date} • {receiptData.time} {receiptData.receipt_number && `• #${receiptData.receipt_number}`}
+                  </p>
+                  <div className="mt-6">
+                    <p style={{ fontFamily: "'Fraunces'", fontSize: "52px", color: "#1A1A1A", margin: 0 }}>
+                      ${receiptData.total.toFixed(2)}
+                    </p>
+                    <p style={{ fontFamily: "'Outfit'", fontSize: "13px", color: "#6B6560", opacity: 0.6 }}>
+                      Includes ${receiptData.tax_gst.toFixed(2)} GST
+                    </p>
+                  </div>
+                </div>
+
+                {/* Line Items */}
+                <div className="space-y-0 mb-8">
+                  <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">Line Items</h3>
+                  {receiptData.items.map((item, idx) => (
+                    <div key={idx} style={{ padding: "12px 0", borderBottom: "1px solid #D4CEC4" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px" }}>
+                        <p style={{ fontFamily: "'Outfit'", fontSize: "15px", color: "#1A1A1A", margin: 0 }}>{item.name}</p>
+                        <p style={{ fontFamily: "'Fraunces'", fontSize: "16px", color: "#1A1A1A", margin: 0 }}>${item.total_price.toFixed(2)}</p>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <p style={{ fontFamily: "'Outfit'", fontSize: "12px", color: "#6B6560", margin: 0 }}>Qty: {item.quantity}</p>
+                        
+                        {/* Category Selector */}
+                        <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+                          <motion.button
+                            type="button"
+                            whileTap={{ scale: 0.96 }}
+                            style={{
+                              background: item.from_cache ? "#EDE8DF" : "#F0E4CC",
+                              border: `1px solid ${item.from_cache ? "#D4CEC4" : "#B8955A"}`,
+                              borderRadius: "999px",
+                              padding: "4px 10px",
+                              fontFamily: "'Outfit'",
+                              fontSize: "11px",
+                              color: "#1A1A1A",
+                              cursor: "pointer",
+                              whiteSpace: "nowrap"
+                            }}
+                          >
+                            {item.subcategory} {item.from_cache ? "" : "· confirm?"}
+                          </motion.button>
+                          
+                          {/* Quick change options if not confirmed */}
+                          {!item.from_cache && (
+                            <div className="flex gap-1">
+                              {["groceries", "dining", "shopping", "other"].filter(c => c !== item.category).map(cat => (
+                                <button
+                                  key={cat}
+                                  onClick={() => {
+                                    const newItems = [...receiptData.items];
+                                    newItems[idx] = { ...item, category: cat, subcategory: cat, from_cache: true };
+                                    setReceiptData({ ...receiptData, items: newItems });
+                                  }}
+                                  className="px-2 py-1 rounded-full bg-gray-100 text-[9px] font-bold text-gray-500 uppercase"
+                                >
+                                  {cat}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Duplicate Warning Section */}
+                {receiptData.duplicateIds && receiptData.duplicateIds.length > 0 && (
+                  <div style={{ background: "#F5E6E0", border: "1px solid #C97B6A", borderRadius: "16px", padding: "16px", margin: "16px 0" }}>
+                    <p style={{ fontFamily: "'Fraunces'", fontSize: "16px", color: "#C97B6A", margin: "0 0 8px" }}>
+                      Possible duplicate found
+                    </p>
+                    <div style={{ display: "flex", gap: "8px" }}>
+                      <div style={{ flex: 1, background: "#F8F4EE", borderRadius: "12px", padding: "12px" }}>
+                        <p style={{ fontFamily: "'Outfit'", fontSize: "11px", color: "#B8955A", margin: "0 0 4px" }}>THIS RECEIPT</p>
+                        <p style={{ fontFamily: "'Fraunces'", fontSize: "18px", color: "#1A1A1A", margin: "0 0 2px" }}>${receiptData.total.toFixed(2)}</p>
+                        <p style={{ fontFamily: "'Outfit'", fontSize: "12px", color: "#6B6560", margin: 0 }}>{receiptData.date}</p>
+                      </div>
+                      <div style={{ flex: 1, background: "#F8F4EE", borderRadius: "12px", padding: "12px" }}>
+                        <p style={{ fontFamily: "'Outfit'", fontSize: "11px", color: "#C97B6A", margin: "0 0 4px" }}>EXISTING</p>
+                        {/* We'd need to fetch the actual duplicate data here for a true comparison, 
+                            but for now we show the total from the first duplicate ID found */}
+                        <p style={{ fontFamily: "'Fraunces'", fontSize: "18px", color: "#1A1A1A", margin: "0 0 2px" }}>${receiptData.total.toFixed(2)}</p>
+                        <p style={{ fontFamily: "'Outfit'", fontSize: "12px", color: "#6B6560", margin: 0 }}>{receiptData.date}</p>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "12px" }}>
+                      <button 
+                        type="button" 
+                        onClick={() => handleResolveDuplicate("keep_new")} 
+                        style={{ background: "#1A1A1A", color: "#FFFFFF", border: "none", borderRadius: "999px", height: "40px", fontFamily: "'Outfit'", fontSize: "13px", cursor: "pointer" }}
+                      >
+                        Keep this one, delete existing
+                      </button>
+                      <button 
+                        type="button" 
+                        onClick={() => handleResolveDuplicate("keep_existing")} 
+                        style={{ background: "#EDE8DF", color: "#1A1A1A", border: "1px solid #D4CEC4", borderRadius: "999px", height: "40px", fontFamily: "'Outfit'", fontSize: "13px", cursor: "pointer" }}
+                      >
+                        Keep existing, discard this
+                      </button>
+                      <button 
+                        type="button" 
+                        onClick={() => handleResolveDuplicate("keep_both")} 
+                        style={{ background: "transparent", color: "#6B6560", border: "none", borderRadius: "999px", height: "40px", fontFamily: "'Outfit'", fontSize: "13px", cursor: "pointer" }}
+                      >
+                        Keep both
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer Actions */}
+              <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-[#F8F4EE] via-[#F8F4EE] to-transparent pt-12">
+                <button
+                  onClick={handleConfirmReceipt}
+                  disabled={isSaving}
+                  className="w-full py-5 bg-[#1A1A1A] text-white rounded-2xl font-bold text-lg shadow-xl shadow-gray-900/20 active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center gap-3"
+                >
+                  {isSaving ? (
+                    <>
+                      <Loader2 className="animate-spin" size={20} />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Confirm Receipt ✦</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </>
         )}
       </AnimatePresence>
     </div>

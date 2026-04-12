@@ -9,7 +9,7 @@ import {
   Timestamp
 } from "firebase/firestore";
 import { db } from "../firebase";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { callGeminiText } from "../lib/gemini";
 import { subDays, startOfDay, endOfDay, format } from "date-fns";
 
 export interface WeeklySummary {
@@ -172,12 +172,6 @@ export const generateWeeklySummary = async (
   const bucketItems = bucketSnap.docs.map(d => d.data().title).join(", ");
 
   // 3. Gemini Call
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-  if (!apiKey) return null;
-
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
-
   const prompt = `Write a warm weekly summary for a couple based on their real data.
 Week of ${format(weekStart, "MMM d")} - ${format(weekEnd, "MMM d")}.
 Data:
@@ -194,8 +188,7 @@ Write a 2-3 sentence warm narrative summary of their week. Specific. Warm. Perso
 Return plain text only. No JSON. No formatting.`;
 
   try {
-    const result = await model.generateContent(prompt);
-    const narrative = result.response.text();
+    const narrative = await callGeminiText(prompt, "gemini-2.5-flash-preview");
 
     const summaryData: WeeklySummary = {
       narrative,

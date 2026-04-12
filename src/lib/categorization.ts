@@ -19,7 +19,7 @@ import {
   increment,
   serverTimestamp,
 } from 'firebase/firestore';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { callGeminiText } from './gemini';
 
 export interface CategoryResult {
   cat: string;
@@ -457,15 +457,7 @@ const categorizeWithGemini = async (
   itemName: string,
   merchantName: string
 ): Promise<CategoryResult> => {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-  if (!apiKey) {
-    return { cat: 'other', confidence: 0.3, source: 'ai' };
-  }
-
   try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-flash-latest' });
-
     const prompt = `Australian receipt line item categorization. Category REQUIRED — NEVER return "other" as your ONLY option.
 Item: "${itemName}" | Merchant: "${merchantName}"
 
@@ -481,8 +473,7 @@ Rules:
 
 Return ONLY valid JSON (no markdown): {"category": "string", "confidence": 0.0, "reasoning": "string"}`;
 
-    const result = await model.generateContent(prompt);
-    const text = result.response.text().trim();
+    const text = (await callGeminiText(prompt, "gemini-2.5-flash-preview", true)).trim();
     const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     const parsed = JSON.parse(cleaned);
 

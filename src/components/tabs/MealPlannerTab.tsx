@@ -21,15 +21,7 @@ import {
   subWeeks
 } from 'date-fns';
 import BottomSheet from '../ui/BottomSheet';
-import { GoogleGenerativeAI } from "@google/generative-ai";
-
-// Initialize Gemini helpers
-const getGeminiModel = () => {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-  if (!apiKey) return null;
-  const genAI = new GoogleGenerativeAI(apiKey);
-  return genAI.getGenerativeModel({ model: "gemini-flash-latest" });
-};
+import { callGeminiText } from '../../lib/gemini';
 
 interface MealSlot {
   breakfast: string;
@@ -162,16 +154,12 @@ export default function MealPlannerTab({ onBack }: { onBack: () => void }) {
 
     setIsGeneratingGroceries(true);
     try {
-      const model = getGeminiModel();
-      if (!model) throw new Error("AI model not available");
-
-      const prompt = `These are our meals for the week: ${mealsList.join(', ')}. 
-      List the ingredients needed as a simple grocery list. 
+      const prompt = `These are our meals for the week: ${mealsList.join(', ')}.
+      List the ingredients needed as a simple grocery list.
       Return ONLY a JSON array of strings. No explanation. No markdown.
       Example: ["chicken breast", "rice", "broccoli", "olive oil"]`;
 
-      const result = await model.generateContent(prompt);
-      const responseText = result.response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '');
+      const responseText = (await callGeminiText(prompt, "gemini-2.5-flash-preview", true)).trim().replace(/```json\n?/g, '').replace(/```\n?/g, '');
       if (!responseText) throw new Error("Empty response from AI");
       
       const ingredients = JSON.parse(responseText);

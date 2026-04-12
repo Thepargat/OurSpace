@@ -1,905 +1,1170 @@
-import { useState, useEffect, useRef, useMemo } from "react";
-import {
-  motion,
-  AnimatePresence,
-  useScroll,
-  useTransform,
-  animate,
-  useReducedMotion,
-} from "motion/react";
-import {
-  doc,
-  onSnapshot,
-  collection,
-  query,
-  where,
-  orderBy,
-  limit,
+import { useState, useEffect, useMemo } from "react";
+import { motion, AnimatePresence } from "motion/react";
+import { 
+  doc, 
+  onSnapshot, 
+  collection, 
+  query, 
+  where, 
+  orderBy, 
+  limit, 
+  Timestamp,
+  getDoc,
+  updateDoc,
+  getDocs
 } from "firebase/firestore";
 import { db } from "../../firebase";
 import { useAuth } from "../AuthWrapper";
-import { differenceInDays, differenceInMinutes, format } from "date-fns";
-import { startProactiveBrain } from "../../services/proactiveBrain";
+import { format, isSameMonth, isSameDay, differenceInYears, isSunday } from "date-fns";
 import { getOrUpdateInsights, Insight } from "../../services/relationshipIntelligence";
-import { cn } from "../../lib/utils";
+import { startProactiveBrain, ProactiveAlert } from "../../services/proactiveBrain";
+import { X, Heart, Gift, Sparkles } from "lucide-react";
+import { saveMood, MOOD_EMOJIS, MoodEntry } from "../../services/moodService";
+import { getSpecialDates, SpecialDate, checkReminders, getEarliestMemory } from "../../services/specialDatesService";
+import { generateWeeklySummary, dismissWeeklySummary, WeeklySummary } from "../../services/weeklySummaryService";
+import confetti from "canvas-confetti";
+import BottomSheet from "../ui/BottomSheet";
+import { callGeminiText } from "../../lib/gemini";
 
-const GOLD = "#B8955A";
-const GOLD_RGB = "184, 149, 90";
-const HEART_RED = "#FF0000";
-const HEART_RED_GLOW = "rgba(255, 0, 0, 0.45)";
-
-// ─── Greeting helper ────────────────────────────────────────────────────────────
-function getGreeting(name: string) {
-  const h = new Date().getHours();
-  const first = name?.split(" ")[0] || "there";
-  if (h < 5)  return `Still up, ${first}?`;
-  if (h < 12) return `Good morning, ${first}`;
-  if (h < 17) return `Good afternoon, ${first}`;
-  if (h < 21) return `Good evening, ${first}`;
-  return `Good night, ${first} 🌙`;
+// --- Types ---
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
 }
 
-// ─── Count-up Number Animator ────────────────────────────────────────────────
-function CountUp({ end, duration = 2 }: { end: number; duration?: number }) {
-  const [count, setCount] = useState(0);
-  const prefersReduced = useReducedMotion();
-  useEffect(() => {
-    if (end === 0) { setCount(0); return; }
-    if (prefersReduced) { setCount(end); return; }
-    const controls = animate(0, end, {
-      duration,
-      ease: [0.16, 1, 0.3, 1] as any,
-      onUpdate: (v) => setCount(Math.floor(v)),
-    });
-    return () => controls.stop();
-  }, [end, duration, prefersReduced]);
-  return <>{count.toLocaleString()}</>;
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
 }
 
-// ─── Skeleton shimmer ────────────────────────────────────────────────────────
-function Shimmer({ className = "" }: { className?: string }) {
-  return (
-    <motion.div
-      className={`rounded-xl bg-gradient-to-r from-[#EDE8DF] via-[#f8f4ee] to-[#EDE8DF] bg-[length:200%_100%] ${className}`}
-      animate={{ backgroundPosition: ["200% 0", "-200% 0"] }}
-      transition={{ duration: 1.8, repeat: Infinity, ease: "linear" }}
-    />
-  );
+interface PartnerData {
+  displayName: string;
+  photoURL: string;
+  isOnline: boolean;
+  lastSeen: Timestamp;
 }
 
-// ─── Ambient floating orbs (decorative background) ──────────────────────────
-function AmbientOrbs({ active }: { active: boolean }) {
-  if (!active) return null;
-  return (
-    <div className="absolute inset-0 overflow-hidden pointer-events-none">
-      {[
-        { size: 180, x: "10%", y: "15%", delay: 0 },
-        { size: 120, x: "70%", y: "30%", delay: 0.8 },
-        { size: 90,  x: "50%", y: "70%", delay: 1.5 },
-      ].map((orb, i) => (
-        <motion.div
-          key={i}
-          className="absolute rounded-full"
-          style={{
-            width: orb.size,
-            height: orb.size,
-            left: orb.x,
-            top: orb.y,
-            background: `radial-gradient(circle, rgba(${GOLD_RGB}, 0.12) 0%, transparent 70%)`,
-            transform: "translate(-50%, -50%)",
-          }}
-          animate={{
-            scale: [1, 1.3, 1],
-            opacity: [0.4, 0.7, 0.4],
-          }}
-          transition={{
-            duration: 5 + i,
-            repeat: Infinity,
-            delay: orb.delay,
-            ease: "easeInOut",
-          }}
-        />
-      ))}
-    </div>
-  );
+interface EventData {
+  title: string;
+  date: Timestamp;
 }
 
-// ─── Intelligent Heartbeat Hook ──────────────────────────────────────────────
-function useHeartbeatState(
-  partnerIsOnline: boolean,
-  partnerLastOnlineAt: string | null
-) {
-  const bothOnline = partnerIsOnline;
-  const [justReunited, setJustReunited] = useState(false);
-  const [celebrationDone, setCelebrationDone] = useState(false);
-  const prevBothOnline = useRef(false);
-
-  useEffect(() => {
-    if (bothOnline && !prevBothOnline.current && !celebrationDone) {
-      setJustReunited(true);
-      setCelebrationDone(true);
-      const t = setTimeout(() => setJustReunited(false), 5000);
-      return () => clearTimeout(t);
-    }
-    if (!bothOnline) setCelebrationDone(false);
-    prevBothOnline.current = bothOnline;
-  }, [bothOnline]);
-
-  const { opacity, speed, color } = useMemo(() => {
-    if (bothOnline) return { opacity: 1, speed: 1.3, color: HEART_RED };
-    if (!partnerIsOnline && partnerLastOnlineAt) {
-      const mins = differenceInMinutes(new Date(), new Date(partnerLastOnlineAt));
-      const fade = Math.max(0.12, 1 - mins / 60);
-      const slow = Math.max(4, 1.4 + mins / 12);
-      return { opacity: fade, speed: slow, color: `rgba(${GOLD_RGB}, ${fade})` };
-    }
-    return { opacity: 0.12, speed: 6, color: `rgba(${GOLD_RGB}, 0.12)` };
-  }, [bothOnline, partnerIsOnline, partnerLastOnlineAt]);
-
-  return { bothOnline, justReunited, opacity, speed, color };
+interface MemoryData {
+  imageUrl: string;
+  caption: string;
+  createdAt: Timestamp;
 }
 
-// ─── Animation variants ──────────────────────────────────────────────────────
-const stagger = {
-  hidden: {},
-  show: { transition: { staggerChildren: 0.07, delayChildren: 0.15 } },
+interface NoteData {
+  text: string;
+  authorName: string;
+  createdAt: Timestamp;
+}
+
+// --- Animation Constants ---
+const spring = { type: "spring" as const, stiffness: 280, damping: 22 };
+
+const fadeUp = (delay = 0) => ({
+  initial: { opacity: 0, y: 40, filter: "blur(4px)" },
+  animate: { opacity: 1, y: 0, filter: "blur(0px)" },
+  transition: { ...spring, delay }
+});
+
+const cardHover = {
+  y: -6,
+  boxShadow: "0 12px 32px rgba(26,26,26,0.12)",
+  transition: { type: "spring" as const, stiffness: 300, damping: 20 }
 };
-const rise = {
-  hidden: { opacity: 0, y: 28, scale: 0.96 },
-  show:  { opacity: 1, y: 0, scale: 1, transition: { type: "spring" as const, stiffness: 260, damping: 22 } },
+
+const cardTap = { scale: 0.98 };
+
+// --- Helper Components ---
+const ensureDate = (val: any): Date | null => {
+  if (!val) return null;
+  if (val instanceof Date) return val;
+  if (typeof val.toDate === 'function') return val.toDate();
+  if (typeof val === 'object' && val.seconds !== undefined) return new Date(val.seconds * 1000);
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? null : d;
 };
-const cardHover = { y: -5, scale: 1.025, transition: { type: "spring" as const, stiffness: 380, damping: 20 } };
-const cardTap   = { scale: 0.96, transition: { duration: 0.09 } };
 
-// ─── Reunion Sparkles ────────────────────────────────────────────────────────
-function ReunionBurst() {
-  return (
-    <>
-      {/* Expanding rings — vivid red */}
-      {[0, 1, 2, 3].map((i) => (
-        <motion.div
-          key={`ring-${i}`}
-          className="absolute inset-0 rounded-full border-2"
-          style={{ borderColor: `${HEART_RED}80` }}
-          initial={{ scale: 0.3, opacity: 0.9 }}
-          animate={{ scale: 4 + i * 1.2, opacity: 0 }}
-          transition={{ duration: 2, delay: i * 0.18, ease: "easeOut" }}
-        />
-      ))}
-      {/* Sparks — red, white, pink */}
-      {Array.from({ length: 12 }).map((_, i) => {
-        const angle = (i / 12) * Math.PI * 2;
-        const dist  = 65 + Math.random() * 25;
-        return (
-          <motion.div
-            key={`spark-${i}`}
-            className="absolute w-2 h-2 rounded-full"
-            style={{
-              background: i % 3 === 0 ? HEART_RED : i % 3 === 1 ? "#fff" : "#ff6b6b",
-              top: "50%", left: "50%",
-              marginTop: -4, marginLeft: -4,
-            }}
-            initial={{ x: 0, y: 0, opacity: 1, scale: 1 }}
-            animate={{
-              x: Math.cos(angle) * dist,
-              y: Math.sin(angle) * dist,
-              opacity: 0, scale: 0,
-            }}
-            transition={{ duration: 1.2, delay: 0.1 + Math.random() * 0.15, ease: "easeOut" }}
-          />
-        );
-      })}
-    </>
-  );
+const Section = ({ children, delay = 0, className = "" }: { children: React.ReactNode, delay?: number, className?: string }) => (
+  <motion.section 
+    {...fadeUp(delay)}
+    className={`w-full px-5 ${className}`}
+  >
+    {children}
+  </motion.section>
+);
+
+const Card = ({ children, onClick, className = "" }: { children: React.ReactNode, onClick?: () => void, className?: string }) => (
+  <motion.div
+    whileHover={onClick ? cardHover : undefined}
+    whileTap={onClick ? cardTap : undefined}
+    onClick={onClick}
+    className={`bg-parchment border border-stone rounded-[20px] overflow-hidden ${onClick ? 'cursor-pointer' : ''} ${className}`}
+  >
+    {children}
+  </motion.div>
+);
+
+const EmptyState = ({ text }: { text: string }) => (
+  <p className="font-outfit italic text-stone text-sm">{text}</p>
+);
+
+// --- Main Component ---
+interface DashboardHomeProps {
+  onNavigate: (tab: string) => void;
 }
 
-// ─── Heartbeat Section ───────────────────────────────────────────────────────
-function HeartbeatSection({
-  userData, partnerData, heart
-}: {
-  userData: any; partnerData: any; heart: ReturnType<typeof useHeartbeatState>;
-}) {
-  // Realistic lub-dub cardiac pattern
-  const heartAnimation = heart.bothOnline
-    ? {
-        scale: [1, 1.18, 1.04, 1.15, 1, 1, 1, 1],
-        filter: [
-          `drop-shadow(0 0 5px ${HEART_RED_GLOW})`,
-          `drop-shadow(0 0 18px ${HEART_RED_GLOW}) drop-shadow(0 0 6px ${HEART_RED})`,
-          `drop-shadow(0 0 8px ${HEART_RED_GLOW})`,
-          `drop-shadow(0 0 16px ${HEART_RED_GLOW}) drop-shadow(0 0 5px ${HEART_RED})`,
-          `drop-shadow(0 0 5px ${HEART_RED_GLOW})`,
-          `drop-shadow(0 0 5px ${HEART_RED_GLOW})`,
-          `drop-shadow(0 0 5px ${HEART_RED_GLOW})`,
-          `drop-shadow(0 0 5px ${HEART_RED_GLOW})`,
-        ],
-      }
-    : {
-        scale: [1, 1.05, 1, 1, 1, 1],
-        filter: `drop-shadow(0 0 3px ${heart.color})`,
-      };
-
-  const heartTransition = {
-    duration: heart.speed,
-    repeat: Infinity,
-    ease: "easeInOut" as const,
-    times: heart.bothOnline ? [0, 0.08, 0.16, 0.24, 0.36, 0.55, 0.75, 1] : [0, 0.15, 0.35, 0.55, 0.75, 1],
-  };
-
-  // Ambient breathing ring — pulses gently behind the heart
-  const ringAnimation = heart.bothOnline
-    ? { scale: [1, 1.6, 1.2, 1.55, 1, 1], opacity: [0.25, 0.08, 0.18, 0.07, 0.18, 0.25] }
-    : { scale: [1, 1.15, 1], opacity: [0.08, 0.03, 0.08] };
-  const ringTransition = {
-    duration: heart.speed,
-    repeat: Infinity,
-    ease: "easeInOut" as const,
-    times: heart.bothOnline ? [0, 0.08, 0.16, 0.24, 0.36, 1] : [0, 0.4, 1],
-  };
-
-  const AvatarBubble = ({ data, isOnline, isSelf }: { data: any; isOnline: boolean; isSelf?: boolean }) => (
-    <div className="flex flex-col items-center gap-1.5">
-      <div className="relative">
-        {/* Online glow ring */}
-        {isOnline && (
-          <motion.div
-            className="absolute -inset-[3px] rounded-full"
-            style={{ background: `conic-gradient(${GOLD}, #C47B6A, ${GOLD})` }}
-            animate={{ rotate: 360 }}
-            transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
-          />
-        )}
-        <div
-          className="relative w-16 h-16 rounded-full overflow-hidden border-2 border-[#fcf9f4] shadow-lg"
-          style={{ zIndex: 1 }}
-        >
-          {data?.photoURL
-            ? <img src={data.photoURL} alt="" className="w-full h-full object-cover" />
-            : (
-              <div className="w-full h-full flex items-center justify-center font-serif text-xl"
-                style={{ background: `${GOLD}1A`, color: GOLD }}>
-                {data?.displayName?.[0] ?? "?"}
-              </div>
-            )
-          }
-        </div>
-        {/* Status dot */}
-        <div className={cn(
-          "absolute bottom-0 right-0 w-4 h-4 border-2 border-[#fcf9f4] rounded-full z-10 shadow",
-          isOnline ? "bg-green-400" : "bg-stone-300"
-        )} />
-      </div>
-      <p className="text-[11px] font-medium text-[#1A1A1A] leading-none">
-        {data?.displayName?.split(" ")[0] || (isSelf ? "You" : "Partner")}
-      </p>
-    </div>
-  );
-
-  return (
-    <div className="flex items-center justify-center gap-6 py-2">
-      <AvatarBubble data={userData} isOnline isSelf />
-
-      {/* Central heart */}
-      <div className="relative flex flex-col items-center w-20">
-        <AnimatePresence>
-          {heart.justReunited && <ReunionBurst />}
-        </AnimatePresence>
-
-        {/* Ambient breathing ring */}
-        <motion.div
-          className="absolute inset-0 rounded-full"
-          style={{
-            background: heart.bothOnline
-              ? `radial-gradient(circle, ${HEART_RED}30 0%, transparent 70%)`
-              : `radial-gradient(circle, ${GOLD}18 0%, transparent 70%)`,
-            width: 80, height: 80,
-            margin: 'auto',
-            top: '50%', left: '50%',
-            transform: 'translate(-50%, -50%)',
-            position: 'absolute',
-          }}
-          animate={ringAnimation}
-          transition={ringTransition}
-        />
-
-        <motion.div
-          animate={heartAnimation}
-          transition={heartTransition}
-          style={{ opacity: heart.opacity }}
-          className="cursor-default select-none relative z-10"
-        >
-          <span
-            className="material-symbols-outlined"
-            style={{
-              fontSize: 44,
-              color: heart.bothOnline ? HEART_RED : heart.color,
-              fontVariationSettings: "'FILL' 1",
-              display: "block",
-            }}
-          >
-            favorite
-          </span>
-        </motion.div>
-
-        <AnimatePresence>
-          {heart.justReunited && (
-            <motion.p
-              initial={{ opacity: 0, y: 8, scale: 0.8 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -6, scale: 0.9 }}
-              className="font-serif italic text-[10px] tracking-wider whitespace-nowrap mt-1"
-              style={{ color: HEART_RED }}
-            >
-              together again ♥
-            </motion.p>
-          )}
-          {!heart.justReunited && !heart.bothOnline && partnerData && (
-            <motion.p
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="font-serif italic text-[10px] text-center leading-tight mt-0.5"
-              style={{ color: `${GOLD}60` }}
-            >
-              {partnerData?.displayName?.split(" ")[0]} is away
-            </motion.p>
-          )}
-        </AnimatePresence>
-      </div>
-
-      <AvatarBubble data={partnerData} isOnline={!!partnerData?.isOnline} />
-    </div>
-  );
-}
-
-// ─── DashboardHome ────────────────────────────────────────────────────────────
-export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) => void }) {
-  const { user, householdId, userData } = useAuth();
-  const [partnerData, setPartnerData] = useState<any>(null);
-  const [partnerId, setPartnerId] = useState<string | null>(null);
-  const [lastMemory, setLastMemory] = useState<any>(null);
-  const [milestones, setMilestones] = useState({ met: 0, married: 0 });
-  const [loaded, setLoaded] = useState(false);
+export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
+  const { user } = useAuth();
+  const [userData, setUserData] = useState<any>(null);
+  const [partnerData, setPartnerData] = useState<PartnerData | null>(null);
+  const [nextEvent, setNextEvent] = useState<EventData | null>(null);
+  const [groceryCount, setGroceryCount] = useState(0);
+  const [monthlySpend, setMonthlySpend] = useState(0);
+  const [lastMemory, setLastMemory] = useState<MemoryData | null>(null);
+  const [lastNote, setLastNote] = useState<NoteData | null>(null);
+  const [currentTime, setCurrentTime] = useState(new Date());
   const [insights, setInsights] = useState<Insight[] | null>(null);
-  const [pulseData, setPulseData] = useState({
-    birthday: { name: "", days: 0 },
-    chores: { count: 0 },
-    goal: { name: "", progress: 0 },
-    event: { title: "" },
-    grocery: { count: 0 },
-  });
+  const [alerts, setAlerts] = useState<ProactiveAlert[]>([]);
+  const [myMood, setMyMood] = useState<MoodEntry | null>(null);
+  const [partnerMood, setPartnerMood] = useState<MoodEntry | null>(null);
+  const [specialDates, setSpecialDates] = useState<SpecialDate[]>([]);
+  const [isAnniversary, setIsAnniversary] = useState(false);
+  const [isPartnerBirthday, setIsPartnerBirthday] = useState(false);
+  const [earliestMemory, setEarliestMemory] = useState<any>(null);
+  const [weeklySummary, setWeeklySummary] = useState<WeeklySummary | null>(null);
+  const [loadingSummary, setLoadingSummary] = useState(false);
+  const [selectedDateForGifts, setSelectedDateForGifts] = useState<SpecialDate | null>(null);
+  const [giftSuggestions, setGiftSuggestions] = useState<any[]>([]);
+  const [loadingGifts, setLoadingGifts] = useState(false);
+  const [loadingInsights, setLoadingInsights] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [startY, setStartY] = useState(0);
 
-  const containerRef = useRef<HTMLDivElement>(null);
-  const { scrollY } = useScroll({ container: containerRef });
-  const heroScale      = useTransform(scrollY, [0, 200], [1, 1.08]);
-  const heroOpacity    = useTransform(scrollY, [0, 180], [1, 0.5]);
-  const navBg          = useTransform(scrollY, [0, 80],  ["rgba(252,249,244,0)", "rgba(252,249,244,0.95)"]);
-
-  // ── Firestore ────────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!householdId || !user) return;
-
-    // Helper: safely parse any date format to a JS Date
-    const toDate = (val: any): Date | null => {
-      if (!val) return null;
-      if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
-      if (typeof val.toDate === 'function') return val.toDate();
-      if (typeof val === 'object' && val.seconds !== undefined) return new Date(val.seconds * 1000);
-      const d = new Date(val);
-      return isNaN(d.getTime()) ? null : d;
+  // --- Error Handler ---
+  const handleError = (error: any, op: OperationType, path: string) => {
+    const errInfo: FirestoreErrorInfo = {
+      error: error.message,
+      operationType: op,
+      path,
+      authInfo: {
+        userId: user?.uid,
+        email: user?.email,
+        emailVerified: user?.emailVerified,
+        isAnonymous: user?.isAnonymous,
+        tenantId: user?.tenantId,
+        providerInfo: user?.providerData.map(p => ({
+          providerId: p.providerId,
+          displayName: p.displayName,
+          email: p.email,
+          photoUrl: p.photoURL
+        })) || []
+      }
     };
+    console.error('Firestore Error:', JSON.stringify(errInfo));
+  };
 
-    const unsubHousehold = onSnapshot(doc(db, "households", householdId), (snap) => {
-      const hData = snap.data();
+  // --- Time-aware Logic ---
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 60000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const sydneyTime = useMemo(() => {
+    return new Intl.DateTimeFormat("en-AU", {
+      timeZone: "Australia/Sydney",
+      hour: "numeric",
+      hour12: false
+    }).format(currentTime);
+  }, [currentTime]);
+
+  const hour = parseInt(sydneyTime);
+  
+  const timeConfig = useMemo(() => {
+    if (isAnniversary) return { bg: "linear-gradient(to bottom, #F5EDD8, #F8F4EE)", greeting: "Happy Anniversary! 🎉", dark: false };
+    if (isPartnerBirthday) return { bg: "#F8F4EE", greeting: `It's ${partnerData?.displayName || 'Partner'}'s birthday today! 🎂`, dark: false };
+    
+    if (hour >= 5 && hour < 10) return { bg: "#E8EEF4", greeting: "Good Morning", dark: false };
+    if (hour >= 10 && hour < 15) return { bg: "#F8F4EE", greeting: "Good Afternoon", dark: false };
+    if (hour >= 15 && hour < 19) return { bg: "#F5EDD8", greeting: "Golden Hour", dark: false };
+    return { bg: "#1A1A1A", greeting: "Good Evening", dark: true };
+  }, [hour]);
+
+  // --- Data Fetching ---
+  useEffect(() => {
+    if (!user) return;
+
+    // 1. User Data
+    const userPath = `users/${user.uid}`;
+    const unsubUser = onSnapshot(doc(db, "users", user.uid), 
+      (snapshot) => {
+        setUserData(snapshot.data());
+      },
+      (err) => handleError(err, OperationType.GET, userPath)
+    );
+
+    // 2. Partner Data
+    let unsubPartner: (() => void) | null = null;
+    let unsubHousehold: (() => void) | null = null;
+    let unsubEvent: (() => void) | null = null;
+    let unsubGroceries: (() => void) | null = null;
+    let unsubExpenses: (() => void) | null = null;
+    let unsubMemory: (() => void) | null = null;
+    let unsubNote: (() => void) | null = null;
+    let unsubMoods: (() => void) | null = null;
+
+    if (userData?.householdId) {
+      const householdPath = `households/${userData.householdId}`;
+      
+      // Fetch Special Dates
+      const fetchSpecial = async () => {
+        const hSnap = await getDoc(doc(db, "households", userData.householdId));
+        const hData = hSnap.data();
+        const partnerId = hData?.memberIds?.find((id: string) => id !== user.uid);
+        
+        const dates = await getSpecialDates(userData.householdId, user.uid, partnerId || null);
+        setSpecialDates(dates);
+        checkReminders(userData.householdId, dates);
+
+        // Check for Anniversary
+        const annivDate = dates.find(d => d.type === 'anniversary');
+        if (annivDate && annivDate.daysUntil === 0) {
+          setIsAnniversary(true);
+          const memory = await getEarliestMemory(userData.householdId);
+          setEarliestMemory(memory);
+          
+          // Trigger Confetti
+          confetti({
+            colors: ["#B8955A", "#F0E4CC", "#C47B6A", "#E8A090"],
+            particleCount: 120,
+            spread: 100,
+            origin: { y: 0.6 }
+          });
+        }
+
+        // Check for Partner Birthday
+        const partnerBday = dates.find(d => d.type === 'birthday' && d.name.includes("'s Birthday"));
+        if (partnerBday && partnerBday.daysUntil === 0) {
+          setIsPartnerBirthday(true);
+        }
+      };
+      fetchSpecial();
+
+      unsubHousehold = onSnapshot(doc(db, "households", userData.householdId), 
+        (snapshot) => {
+          const hData = snapshot.data();
+          const partnerId = hData?.memberIds?.find((id: string) => id !== user.uid);
+          
+          if (partnerId) {
+            const partnerPath = `users/${partnerId}`;
+            if (unsubPartner) unsubPartner();
+            unsubPartner = onSnapshot(doc(db, "users", partnerId), 
+              (pSnap) => {
+                setPartnerData(pSnap.data() as PartnerData);
+              },
+              (err) => handleError(err, OperationType.GET, partnerPath)
+            );
+          } else {
+            if (unsubPartner) unsubPartner();
+            unsubPartner = null;
+            setPartnerData(null);
+          }
+        },
+        (err) => handleError(err, OperationType.GET, householdPath)
+      );
+      
+      // 3. Next Event
+      const eventsPath = `${householdPath}/events`;
+      unsubEvent = onSnapshot(
+        query(
+          collection(db, "households", userData.householdId, "events"),
+          where("date", ">=", Timestamp.now()),
+          orderBy("date", "asc"),
+          limit(1)
+        ),
+        (snap) => setNextEvent(snap.docs[0]?.data() as EventData),
+        (err) => handleError(err, OperationType.LIST, eventsPath)
+      );
+
+      // 4. Grocery Count
+      const groceriesPath = `${householdPath}/groceries`;
+      unsubGroceries = onSnapshot(
+        query(
+          collection(db, "households", userData.householdId, "groceries"),
+          where("completed", "==", false)
+        ),
+        (snap) => setGroceryCount(snap.size),
+        (err) => handleError(err, OperationType.LIST, groceriesPath)
+      );
+
+      // 5. Monthly Spend
+      const expensesPath = `${householdPath}/expenses`;
+      unsubExpenses = onSnapshot(
+        collection(db, "households", userData.householdId, "expenses"),
+        (snap) => {
+          const total = snap.docs
+            .map(d => d.data())
+            .filter(d => {
+              const date = ensureDate(d.date);
+              return date && isSameMonth(date, new Date());
+            })
+            .reduce((acc, curr) => acc + (curr.amount || curr.total || 0), 0);
+          setMonthlySpend(total);
+        },
+        (err) => handleError(err, OperationType.LIST, expensesPath)
+      );
+
+      // 6. Last Memory
+      const memoriesPath = `${householdPath}/memories`;
+      unsubMemory = onSnapshot(
+        query(
+          collection(db, "households", userData.householdId, "memories"),
+          orderBy("createdAt", "desc"),
+          limit(1)
+        ),
+        (snap) => setLastMemory(snap.docs[0]?.data() as MemoryData),
+        (err) => handleError(err, OperationType.LIST, memoriesPath)
+      );
+
+      // 7. Last Note
+      const notesPath = `${householdPath}/notes`;
+      unsubNote = onSnapshot(
+        query(
+          collection(db, "households", userData.householdId, "notes"),
+          orderBy("createdAt", "desc"),
+          limit(1)
+        ),
+        (snap) => setLastNote(snap.docs[0]?.data() as NoteData),
+        (err) => handleError(err, OperationType.LIST, notesPath)
+      );
+
+      // 8. Moods
+      const today = new Date().toISOString().split('T')[0];
+      const moodsRef = collection(db, "households", userData.householdId, "moods");
+      unsubMoods = onSnapshot(
+        query(moodsRef, where("date", "==", today)),
+        (snap) => {
+          const todayMoods = snap.docs.map(d => d.data() as MoodEntry);
+          setMyMood(todayMoods.find(m => m.userId === user.uid) || null);
+
+          const partnerId = userData?.memberIds?.find((id: string) => id !== user.uid);
+          if (partnerId) {
+            setPartnerMood(todayMoods.find(m => m.userId === partnerId) || null);
+          }
+        }
+      );
+    }
+
+    return () => {
+      unsubUser();
+      if (unsubHousehold) unsubHousehold();
+      if (unsubPartner) unsubPartner();
+      if (unsubEvent) unsubEvent();
+      if (unsubGroceries) unsubGroceries();
+      if (unsubExpenses) unsubExpenses();
+      if (unsubMemory) unsubMemory();
+      if (unsubNote) unsubNote();
+      if (unsubMoods) unsubMoods();
+    };
+  }, [user, userData?.householdId]);
+
+  // --- Proactive Brain ---
+  useEffect(() => {
+    if (!userData?.householdId || !user) return;
+
+    let stopBrain: (() => void) | null = null;
+    let unsubAlerts: (() => void) | null = null;
+
+    const initBrain = async () => {
+      const hSnap = await getDoc(doc(db, "households", userData.householdId));
+      const hData = hSnap.data();
       const pId = hData?.memberIds?.find((id: string) => id !== user.uid);
-      if (pId) setPartnerId(pId);
-
-      // ── Days Together ── use meetDate > anniversary > household creation
-      const meetDate =
-        toDate(userData?.meetDate) ||
-        toDate(userData?.anniversary) ||
-        toDate(hData?.meetDate) ||
-        toDate(hData?.createdAt);
-      if (meetDate) {
-        setMilestones((m) => ({ ...m, met: Math.max(0, differenceInDays(new Date(), meetDate)) }));
-      }
-
-      // ── Days Married ── user's own doc first ('anniversary' OR 'anniversaryDate'), then household
-      const marriageDate =
-        toDate(userData?.anniversary) ||        // Settings saves this field
-        toDate(userData?.anniversaryDate) ||    // legacy
-        toDate(userData?.weddingDate) ||
-        toDate(hData?.anniversaryDate);
-      if (marriageDate) {
-        setMilestones((m) => ({ ...m, married: Math.max(0, differenceInDays(new Date(), marriageDate)) }));
-      }
-
+      
       if (pId) {
-        onSnapshot(doc(db, "users", pId), (pSnap) => {
-          const pData = pSnap.data();
-          setPartnerData({ ...pData, uid: pId });
-
-          // Birthday countdown for partner
-          if (pData?.birthday) {
-            const bday = toDate(pData.birthday);
-            if (bday) {
-              const today = new Date();
-              const next = new Date(today.getFullYear(), bday.getMonth(), bday.getDate());
-              if (next < today) next.setFullYear(today.getFullYear() + 1);
-              const days = differenceInDays(next, today);
-              setPulseData((p) => ({
-                ...p,
-                birthday: { name: pData.displayName || "Partner", days },
-              }));
-            }
-          }
-
-          // Marriage date from partner as fallback
-          if (!userData?.anniversaryDate && !userData?.weddingDate && pData?.anniversaryDate) {
-            const mDate = toDate(pData.anniversaryDate);
-            if (mDate) {
-              setMilestones((m) => ({ ...m, married: Math.max(0, differenceInDays(new Date(), mDate)) }));
-            }
-          }
+        stopBrain = startProactiveBrain(userData.householdId, user.uid, pId);
+        
+        // Listen for unread alerts
+        const alertsRef = collection(db, 'households', userData.householdId, 'proactiveAlerts');
+        const q = query(
+          alertsRef, 
+          where('read', '==', false), 
+          orderBy('detectedAt', 'desc'),
+          limit(3)
+        );
+        
+        unsubAlerts = onSnapshot(q, (snap) => {
+          setAlerts(snap.docs.map(d => ({ id: d.id, ...d.data() } as ProactiveAlert)));
         });
       }
-      setLoaded(true);
-    });
+    };
 
-    const unsubMemory = onSnapshot(
-      query(collection(db, "households", householdId, "memories"), orderBy("date", "desc"), limit(1)),
-      (snap) => { if (snap.docs[0]) setLastMemory(snap.docs[0].data()); }
-    );
+    initBrain();
 
-    const unsubChores = onSnapshot(
-      query(collection(db, "households", householdId, "chores"), where("completed", "==", false)),
-      (snap) => setPulseData((p) => ({ ...p, chores: { count: snap.size } }))
-    );
+    return () => {
+      if (stopBrain) stopBrain();
+      if (unsubAlerts) unsubAlerts();
+    };
+  }, [userData?.householdId, user?.uid]);
 
-    const unsubGrocery = onSnapshot(
-      query(collection(db, "households", householdId, "groceries"), where("completed", "==", false)),
-      (snap) => setPulseData((p) => ({ ...p, grocery: { count: snap.size } }))
-    );
-
-    const unsubGoals = onSnapshot(
-      query(collection(db, "households", householdId, "savingsGoals"), orderBy("currentAmount", "desc"), limit(1)),
-      (snap) => {
-        const g = snap.docs[0]?.data();
-        if (g) setPulseData((p) => ({
-          ...p,
-          goal: {
-            name: g.title,
-            progress: g.targetAmount > 0 ? Math.min(100, (g.currentAmount / g.targetAmount) * 100) : 0,
-          },
-        }));
+  // --- Insights Logic ---
+  const fetchInsights = async (force = false) => {
+    if (!userData?.householdId || !user) return;
+    
+    setLoadingInsights(true);
+    try {
+      const hSnap = await getDoc(doc(db, "households", userData.householdId));
+      const hData = hSnap.data();
+      const partnerId = hData?.memberIds?.find((id: string) => id !== user.uid);
+      
+      if (!partnerId) {
+        setLoadingInsights(false);
+        return;
       }
-    );
 
-    // Events use startTime ISO string field (not 'date')
-    const nowISO = new Date().toISOString();
-    const unsubEvent = onSnapshot(
-      query(
-        collection(db, "households", householdId, "events"),
-        where("startTime", ">=", nowISO),
-        orderBy("startTime", "asc"),
-        limit(1)
-      ),
-      (snap) => setPulseData((p) => ({ ...p, event: { title: snap.docs[0]?.data()?.title || "Nothing planned" } }))
-    );
+      const pSnap = await getDoc(doc(db, "users", partnerId));
+      const pData = pSnap.data();
 
-    return () => { unsubHousehold(); unsubMemory(); unsubChores(); unsubGoals(); unsubGrocery(); unsubEvent(); };
-  }, [householdId, user?.uid, userData]);
+      const result = await getOrUpdateInsights(
+        userData.householdId,
+        user.uid,
+        partnerId,
+        userData.displayName || "You",
+        pData?.displayName || "Partner",
+        force
+      );
+      setInsights(result);
+    } catch (err) {
+      console.error("Error fetching insights:", err);
+    } finally {
+      setLoadingInsights(false);
+    }
+  };
 
-  // ── Proactive Brain ───────────────────────────────────────────────────────
+  const fetchGiftSuggestions = async (date: SpecialDate) => {
+    if (!userData?.householdId) return;
+    setLoadingGifts(true);
+    setSelectedDateForGifts(date);
+    
+    // Get context
+    const savingsSnap = await getDocs(collection(db, "households", userData.householdId, "savingsGoals"));
+    const totalSavings = savingsSnap.docs.reduce((acc, d) => acc + (d.data().currentAmount || 0), 0);
+
+    const bucketSnap = await getDocs(collection(db, "households", userData.householdId, "bucketList"));
+    const interests = bucketSnap.docs.map(d => d.data().title).join(", ");
+
+    const prompt = `Suggest 4 thoughtful gift ideas for a ${date.name} in ${date.daysUntil} days.
+    Current savings available: $${totalSavings}
+    Monthly budget remaining: $${(2000 - monthlySpend).toFixed(2)} (estimated)
+    Their shared interests based on bucket list: ${interests || "travel, cooking, home improvement"}
+    Return ONLY JSON array:
+    [{ "emoji": "string", "name": "string", "description": "max 15 words", "estimatedCost": "string", "link": null }]`;
+
+    try {
+      const text = await callGeminiText(prompt, "gemini-2.5-flash-preview", true);
+      setGiftSuggestions(JSON.parse(text || "[]"));
+    } catch (err) {
+      console.error("Gift suggestions failed:", err);
+    } finally {
+      setLoadingGifts(false);
+    }
+  };
+
+  const fetchWeeklySummary = async () => {
+    if (!userData?.householdId || !user) return;
+    
+    setLoadingSummary(true);
+    try {
+      // Get partner ID from household
+      const hSnap = await getDoc(doc(db, "households", userData.householdId));
+      const hData = hSnap.data();
+      const partnerId = hData?.memberIds?.find((id: string) => id !== user.uid);
+
+      if (!partnerId) {
+        setLoadingSummary(false);
+        return;
+      }
+
+      const summary = await generateWeeklySummary(
+        userData.householdId,
+        user.uid,
+        userData.displayName || "You",
+        partnerId,
+        partnerData?.displayName || "Partner"
+      );
+      
+      if (summary) {
+        if (summary.dismissedAt && summary.generatedAt) {
+          const dismissedDate = summary.dismissedAt.toDate();
+          const generatedDate = summary.generatedAt.toDate();
+          if (dismissedDate >= generatedDate) {
+            setWeeklySummary(null);
+          } else {
+            setWeeklySummary(summary);
+          }
+        } else {
+          setWeeklySummary(summary);
+        }
+      }
+    } catch (error) {
+      console.error("Error fetching weekly summary:", error);
+    } finally {
+      setLoadingSummary(false);
+    }
+  };
+
+  const handleDismissSummary = async () => {
+    if (userData?.householdId) {
+      await dismissWeeklySummary(userData.householdId);
+      setWeeklySummary(null);
+    }
+  };
+
   useEffect(() => {
-    if (!householdId || !user || !partnerId) return;
-    const stop = startProactiveBrain(householdId, user.uid, partnerId);
-    return () => stop();
-  }, [householdId, user?.uid, partnerId]);
+    if (userData?.householdId) {
+      fetchInsights();
+      fetchWeeklySummary();
+      // Auto refresh every 24 hours
+      const interval = setInterval(() => {
+        fetchInsights();
+        fetchWeeklySummary();
+      }, 24 * 60 * 60 * 1000);
+      return () => clearInterval(interval);
+    }
+  }, [userData?.householdId, partnerData, user]);
 
-  // ── Relationship Intelligence (AI Insights) ──────────────────────────────
-  useEffect(() => {
-    if (!householdId || !user || !partnerId || !userData || !partnerData) return;
-    const userName = userData.displayName?.split(' ')[0] || 'You';
-    const partnerName = partnerData.displayName?.split(' ')[0] || 'Partner';
-    getOrUpdateInsights(householdId, user.uid, partnerId, userName, partnerName)
-      .then((result) => { if (result) setInsights(result); })
-      .catch(() => {});
-  }, [householdId, user?.uid, partnerId]);
+  // --- Pull to Refresh Logic ---
+  const handleTouchStart = (e: React.TouchEvent) => {
+    const container = e.currentTarget as HTMLDivElement;
+    if (container.scrollTop === 0) {
+      setStartY(e.touches[0].pageY);
+    }
+  };
 
-  const heart = useHeartbeatState(!!partnerData?.isOnline, partnerData?.lastOnlineAt || null);
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (startY === 0) return;
+    const y = e.touches[0].pageY;
+    const dist = y - startY;
+    if (dist > 70 && !isRefreshing) {
+      setIsRefreshing(true);
+      fetchInsights(true).then(() => {
+        setIsRefreshing(false);
+        setStartY(0);
+      });
+    }
+  };
 
-  // Pulse card configs — all fixed calculations
-  const pulseCards = useMemo(() => [
-    {
-      icon: "cake", label: "Birthday", accent: "#E17B9B",
-      body: pulseData.birthday.name && pulseData.birthday.days >= 0
-        ? pulseData.birthday.days === 0
-          ? `🎂 It's ${pulseData.birthday.name.split(' ')[0]}'s birthday today!`
-          : `${pulseData.birthday.name.split(' ')[0]}'s birthday in ${pulseData.birthday.days}d`
-        : "No birthday upcoming",
-      badge: pulseData.birthday.days > 0 && pulseData.birthday.days <= 30 ? `${pulseData.birthday.days}d` : null,
-      onClick: () => onNavigate("together"),
-    },
-    {
-      icon: "task_alt", label: "Chores", accent: "#5B68E8",
-      body: pulseData.chores.count > 0
-        ? `${pulseData.chores.count} task${pulseData.chores.count > 1 ? 's' : ''} to do`
-        : "All caught up ✓",
-      badge: pulseData.chores.count > 0 ? `${pulseData.chores.count}` : null,
-      onClick: () => onNavigate("chores"),
-    },
-    {
-      icon: "savings", label: "Savings", accent: GOLD,
-      body: pulseData.goal.name || "Set a shared goal",
-      badge: pulseData.goal.progress > 0 ? `${Math.round(pulseData.goal.progress)}%` : null,
-      progress: pulseData.goal.progress,
-      onClick: () => onNavigate("finances"),
-    },
-    {
-      icon: "shopping_cart", label: "Grocery", accent: "#3BAA7C",
-      body: pulseData.grocery.count > 0
-        ? `${pulseData.grocery.count} item${pulseData.grocery.count > 1 ? 's' : ''} left to buy`
-        : "Grocery list is clear",
-      badge: pulseData.grocery.count > 0 ? `${pulseData.grocery.count}` : null,
-      onClick: () => onNavigate("grocery"),
-    },
-  ], [pulseData, onNavigate]);
+  const handleTouchEnd = () => {
+    setStartY(0);
+  };
 
-  const quickActions = [
-    { icon: "shopping_cart", label: "Grocery",  nav: "grocery" },
-    { icon: "restaurant_menu", label: "Meals",  nav: "meal-planner" },
-    { icon: "task_alt", label: "Chores",         nav: "chores" },
-    { icon: "sticky_note_2", label: "Notes",     nav: "notes" },
-    { icon: "account_balance_wallet", label: "Finance", nav: "finances" },
-  ];
+  const lastSeenText = useMemo(() => {
+    const lastSeenDate = ensureDate(partnerData?.lastSeen);
+    if (!lastSeenDate) return "";
+    const diff = Math.floor((Date.now() - lastSeenDate.getTime()) / 60000);
+    if (diff < 1) return "Just now";
+    if (diff < 60) return `Last seen ${diff}m ago`;
+    return `Last seen ${Math.floor(diff/60)}h ago`;
+  }, [partnerData]);
+
+  const handleDismissAlert = async (alertId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!userData?.householdId) return;
+    await updateDoc(doc(db, 'households', userData.householdId, 'proactiveAlerts', alertId), {
+      read: true
+    });
+  };
+
+  const handleAlertClick = (alert: ProactiveAlert) => {
+    // Map alert types to screens
+    switch (alert.type) {
+      case 'bill':
+      case 'datenight':
+        onNavigate('calendar');
+        break;
+      case 'grocery':
+        onNavigate('grocery');
+        break;
+      case 'budget':
+        onNavigate('finances');
+        break;
+      case 'chore':
+        onNavigate('more'); // Assuming chores are in 'more' or have their own tab
+        break;
+      case 'savings':
+        onNavigate('finances');
+        break;
+      case 'anniversary':
+      case 'birthday':
+        onNavigate('together');
+        break;
+    }
+  };
+
+  const handleMoodCheckIn = async (moodIndex: number) => {
+    if (!userData?.householdId || !user) return;
+    await saveMood(userData.householdId, user.uid, moodIndex + 1);
+  };
 
   return (
-    <div
-      ref={containerRef}
-      className="relative h-full overflow-y-auto overflow-x-hidden bg-[#fcf9f4] no-scrollbar"
+    <div 
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      style={{
+        height: 'calc(100dvh - 80px)',
+        overflowY: 'auto',
+        overflowX: 'hidden',
+        WebkitOverflowScrolling: 'touch',
+        overscrollBehavior: 'contain',
+        paddingBottom: 'calc(32px + env(safe-area-inset-bottom))',
+        background: '#F8F4EE'
+      }}
+      className="no-scrollbar"
     >
-      {/* Ambient orbs — active when partner is online */}
-      <AmbientOrbs active={heart.bothOnline} />
-
-      {/* ── Sticky TopAppBar ─────────────────────────────────────────────── */}
-      <motion.nav
-        style={{ background: navBg }}
-        className="sticky top-0 z-[100] flex justify-between items-center w-full px-5 pt-4 pb-3 backdrop-blur-xl"
+      {/* Section 1: Time-aware Header */}
+      <motion.header
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: 1, y: 0 }}
+        onClick={() => onNavigate('calendar')}
+        style={{ background: timeConfig.bg }}
+        className="w-full pt-20 pb-12 px-8 transition-colors duration-1000 cursor-pointer"
       >
-        <motion.div
-          initial={{ opacity: 0, x: -12 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ delay: 0.1, type: "spring", stiffness: 280, damping: 22 }}
-          whileTap={{ scale: 0.88 }}
-          onClick={() => onNavigate("settings")}
-          className="w-9 h-9 rounded-full overflow-hidden border-2 cursor-pointer"
-          style={{ borderColor: `${GOLD}40` }}
-        >
-          {userData?.photoURL
-            ? <img src={userData.photoURL} alt="Me" className="w-full h-full object-cover" />
-            : (
-              <div className="w-full h-full flex items-center justify-center font-serif text-sm"
-                style={{ background: `${GOLD}20`, color: GOLD }}>
-                {userData?.displayName?.[0] ?? "U"}
-              </div>
-            )
-          }
-        </motion.div>
-
-        <motion.h1
-          initial={{ opacity: 0, y: -10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.15, type: "spring", stiffness: 280, damping: 22 }}
-          className="font-serif text-[26px] font-light text-[#1A1A1A] flex items-baseline gap-1 tracking-tight"
-        >
-          OurSpace
-          <motion.span
-            className="inline-block h-2 w-2 rounded-full"
-            style={{ background: GOLD }}
-            animate={{ scale: [1, 1.4, 1] }}
-            transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
-          />
-        </motion.h1>
-
-        <motion.div
-          initial={{ opacity: 0, x: 12 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ delay: 0.1, type: "spring", stiffness: 280, damping: 22 }}
-          whileTap={{ scale: 0.88, rotate: 30 }}
-          onClick={() => onNavigate("settings")}
-          className="w-9 h-9 flex items-center justify-center cursor-pointer rounded-full hover:bg-[#B8955A]/10 transition-colors"
-        >
-          <span className="material-symbols-outlined text-[22px]" style={{ color: "rgba(28,28,25,0.45)" }}>settings</span>
-        </motion.div>
-      </motion.nav>
-
-      <main className="px-5 pb-32 space-y-6 pt-2">
-        {/* ── Greeting ───────────────────────────────────────────────────── */}
-        <motion.p
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.18, duration: 0.5 }}
-          className="font-serif italic text-[15px]"
-          style={{ color: `${GOLD}90` }}
-        >
-          {getGreeting(userData?.displayName || "")}
-        </motion.p>
-
-        {/* ── Hero Memory ────────────────────────────────────────────────── */}
-        <motion.section
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.22, type: "spring", stiffness: 260, damping: 22 }}
-          className="relative"
-        >
-          {!loaded ? (
-            <Shimmer className="w-full h-52 rounded-3xl" />
-          ) : (
-            <div className="w-full h-52 rounded-3xl overflow-hidden shadow-[0_16px_48px_rgba(0,0,0,0.10)] relative">
-              <motion.img
-                style={{ scale: heroScale, opacity: heroOpacity }}
-                src={lastMemory?.imageURL || "https://images.unsplash.com/photo-1518199266791-5375a83190b7?auto=format&fit=crop&q=80&w=2070"}
-                alt="Our latest memory"
-                className="w-full h-full object-cover origin-center"
-              />
-              {/* Gradient overlay */}
-              <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent" />
-              {lastMemory?.caption && (
-                <p className="absolute bottom-4 left-5 right-16 text-white font-serif text-sm italic opacity-90 leading-snug line-clamp-2">
-                  {lastMemory.caption}
-                </p>
-              )}
-              {/* Memories pill */}
-              <motion.button
-                whileTap={{ scale: 0.92 }}
-                onClick={() => onNavigate("together")}
-                className="absolute top-3 right-3 bg-white/90 backdrop-blur-md rounded-full px-3 py-1.5 flex items-center gap-1.5 shadow-md"
-              >
-                <span className="material-symbols-outlined text-[14px]" style={{ color: GOLD, fontVariationSettings: "'FILL' 1" }}>photo_library</span>
-                <span className="text-[11px] font-medium text-[#1A1A1A]">Memories</span>
-              </motion.button>
-            </div>
-          )}
-        </motion.section>
-
-        {/* ── Presence & Heartbeat ──────────────────────────────────────── */}
-        <motion.section
-          initial={{ opacity: 0, scale: 0.94 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: 0.32, type: "spring", stiffness: 260, damping: 22 }}
-          className="relative bg-white/60 backdrop-blur-sm rounded-3xl px-4 py-5 border border-black/[0.04] shadow-sm"
-        >
-          <HeartbeatSection userData={userData} partnerData={partnerData} heart={heart} />
-
-          {/* Status line */}
-          <motion.p
-            className="text-center font-serif italic text-[11px] mt-3"
-            style={{ color: `${GOLD}70` }}
-            animate={{ opacity: heart.bothOnline ? [0.6, 1, 0.6] : 0.5 }}
-            transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+        <div className="space-y-1">
+          <h1 
+            className="font-serif text-[48px] font-light leading-tight"
+            style={{ color: timeConfig.dark ? "#F8F4EE" : "#1A1A1A" }}
           >
-            {heart.bothOnline
-              ? "You're both here ♥"
-              : partnerData?.isOnline === false
-                ? `${partnerData?.displayName?.split(" ")[0] || "Partner"} was last seen ${
-                    partnerData?.lastOnlineAt
-                      ? differenceInMinutes(new Date(), new Date(partnerData.lastOnlineAt)) < 60
-                        ? `${differenceInMinutes(new Date(), new Date(partnerData.lastOnlineAt))}m ago`
-                        : "a while ago"
-                      : "recently"
-                  }`
-                : "Missing them..."
-            }
-          </motion.p>
-        </motion.section>
+            {timeConfig.greeting}
+          </h1>
+          <p 
+            className="font-outfit text-lg"
+            style={{ color: timeConfig.dark ? "#D4CEC4" : "#6B6560" }}
+          >
+            {userData?.displayName?.split(' ')[0] || "there"}
+          </p>
+        </div>
+        <div className="mt-8">
+          <p 
+            className="font-outfit text-[13px] uppercase tracking-[2px] font-medium"
+            style={{ color: timeConfig.dark ? "#B8955A" : "#B8955A" }}
+          >
+            {format(currentTime, "EEEE, d MMMM")}
+          </p>
+        </div>
+      </motion.header>
 
-        {/* ── Milestones ────────────────────────────────────────────────── */}
-        <motion.section
-          variants={stagger} initial="hidden" animate="show"
-          className="grid grid-cols-2 gap-3"
-        >
-          {[
-            { label: "Days Together", value: milestones.met,     icon: "favorite_border",  color: HEART_RED },
-            { label: "Days Married",  value: milestones.married, icon: "diamond",           color: GOLD },
-          ].map(({ label, value, icon, color }) => (
-            <motion.div
-              key={label}
-              variants={rise}
-              whileHover={cardHover}
-              whileTap={cardTap}
-              className="relative bg-white rounded-2xl p-5 text-center overflow-hidden border border-black/[0.04]"
-              style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.05)" }}
-            >
-              <div className="absolute inset-0" style={{ background: `radial-gradient(circle at center, ${color}06, transparent 70%)` }} />
-              <span
-                className="material-symbols-outlined text-[22px] mb-2 block"
-                style={{ color: `${color}90`, fontVariationSettings: "'FILL' 1" }}
-              >
-                {icon}
-              </span>
-              <p className="text-[9px] font-bold uppercase tracking-[0.18em] mb-1" style={{ color: `${color}90` }}>{label}</p>
-              {loaded
-                ? (
-                  <div>
-                    <p className="font-serif text-[32px] font-bold text-[#1A1A1A] leading-none">
-                      {value === 0 ? '—' : <CountUp end={value} />}
-                    </p>
-                    {value >= 365 && (
-                      <p className="font-serif text-[10px] italic mt-0.5" style={{ color: `${color}70` }}>
-                        {Math.floor(value / 365)}y {value % 365}d
-                      </p>
-                    )}
-                  </div>
-                )
-                : <Shimmer className="h-9 w-20 mx-auto" />
-              }
-              {value === 0 && loaded && (
-                <p className="font-outfit text-[9px] text-[#6B6560] mt-1">Set date in settings</p>
-              )}
-              {value > 0 && <p className="font-serif text-[10px] text-[#6B6560] italic mt-1">days</p>}
-            </motion.div>
-          ))}
-        </motion.section>
-
-        {/* ── Daily Pulse Grid ─────────────────────────────────────────── */}
-        <motion.section variants={stagger} initial="hidden" animate="show" className="grid grid-cols-2 gap-3">
-          {pulseCards.map(({ icon, label, accent, body, badge, progress, onClick }, i) => (
-            <motion.button
-              key={label}
-              variants={rise}
-              whileHover={cardHover}
-              whileTap={cardTap}
-              onClick={onClick}
-              className="bg-white rounded-2xl p-4 text-left flex flex-col justify-between h-36 relative overflow-hidden border border-black/[0.04]"
-              style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.05)" }}
-            >
-              {/* Left accent border */}
-              <div className="absolute left-0 top-4 bottom-4 w-[3px] rounded-r-full" style={{ background: accent }} />
-              <div className="flex justify-between items-start pl-3">
-                <span
-                  className="material-symbols-outlined text-[22px]"
-                  style={{ color: accent, fontVariationSettings: "'FILL' 1" }}
-                >
-                  {icon}
-                </span>
-                {badge != null && (
-                  <motion.span
-                    initial={{ scale: 0 }}
-                    animate={{ scale: 1 }}
-                    transition={{ type: "spring", stiffness: 400, delay: 0.3 + i * 0.07 }}
-                    className="text-[10px] font-bold px-2 py-0.5 rounded-full"
-                    style={{ background: `${accent}20`, color: accent }}
-                  >
-                    {badge}
-                  </motion.span>
-                )}
-              </div>
-              <div className="pl-3">
-                <p className="text-[9px] font-bold uppercase tracking-[0.14em] mb-1" style={{ color: `${accent}80` }}>{label}</p>
-                <p className="text-[13px] font-semibold text-[#1A1A1A] leading-tight line-clamp-2">{body}</p>
-                {progress != null && progress > 0 && (
-                  <div className="mt-2 h-1 bg-[#EDE8DF] rounded-full overflow-hidden">
-                    <motion.div
-                      initial={{ width: 0 }}
-                      animate={{ width: `${progress}%` }}
-                      transition={{ duration: 1.5, ease: "easeOut", delay: 0.8 }}
-                      className="h-full rounded-full"
-                      style={{ background: accent }}
-                    />
-                  </div>
-                )}
-              </div>
-            </motion.button>
-          ))}
-        </motion.section>
-
-        {/* ── AI Relationship Insights ─────────────────────────────────── */}
-        <AnimatePresence>
-          {insights && insights.length > 0 && (
-            <motion.section
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.55, type: "spring", stiffness: 240, damping: 22 }}
-            >
-              <p className="text-[10px] font-bold uppercase tracking-[0.18em] mb-3" style={{ color: `${GOLD}80` }}>
-                🧠 Relationship Pulse
+      <div className="space-y-8 mt-8">
+        {/* Coming Up Countdown */}
+        {specialDates.length > 0 && (
+          <Section delay={0.03}>
+            <div className="flex items-center justify-between mb-4">
+              <p className="font-outfit text-[11px] tracking-[2px] uppercase text-brass font-medium">
+                Coming Up
               </p>
-              <div className="space-y-2.5">
-                {insights.slice(0, 3).map((insight, i) => (
-                  <motion.div
-                    key={i}
-                    initial={{ opacity: 0, x: -12 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: 0.6 + i * 0.08, type: "spring", stiffness: 280, damping: 24 }}
-                    className="bg-white rounded-2xl p-4 border border-black/[0.04] relative overflow-hidden"
-                    style={{ boxShadow: "0 6px 24px rgba(0,0,0,0.04)" }}
-                  >
-                    {/* Subtle left accent */}
-                    <div className="absolute left-0 top-3 bottom-3 w-[3px] rounded-r-full" style={{ background: GOLD }} />
-                    <div className="pl-3">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-[18px] leading-none">{insight.emoji}</span>
-                        <span className="font-semibold text-[13px] text-[#1A1A1A] leading-snug">{insight.title}</span>
-                      </div>
-                      <p className="text-[12px] text-[#6B6560] leading-relaxed">{insight.body}</p>
-                      {insight.action && (
-                        <span
-                          className="inline-block mt-2 text-[11px] font-medium px-2.5 py-1 rounded-full"
-                          style={{ background: `${GOLD}18`, color: GOLD }}
-                        >
-                          {insight.action}
-                        </span>
-                      )}
-                    </div>
-                  </motion.div>
-                ))}
-              </div>
-            </motion.section>
-          )}
-        </AnimatePresence>
-
-        {/* ── Next Event Strip ────────────────────────────────────────── */}
-        {pulseData.event.title && pulseData.event.title !== "Nothing planned" && (
-          <motion.button
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.62, type: "spring", stiffness: 240, damping: 22 }}
-            onClick={() => onNavigate("calendar")}
-            className="w-full bg-white rounded-2xl px-4 py-3 flex items-center gap-3 border border-black/[0.04] text-left"
-            style={{ boxShadow: "0 6px 24px rgba(0,0,0,0.04)" }}
-          >
-            <span className="material-symbols-outlined text-[20px]" style={{ color: "#3BAA7C", fontVariationSettings: "'FILL' 1" }}>event</span>
-            <div className="flex-1">
-              <p className="text-[9px] font-bold uppercase tracking-[0.14em] mb-0.5" style={{ color: "#3BAA7C99" }}>Next Event</p>
-              <p className="text-[13px] font-semibold text-[#1A1A1A] leading-tight">{pulseData.event.title}</p>
             </div>
-            <span className="material-symbols-outlined text-[16px] opacity-30">chevron_right</span>
-          </motion.button>
+            <div className="flex gap-4 overflow-x-auto pb-4 -mx-5 px-5 no-scrollbar snap-x">
+              {specialDates.map((date) => (
+                <motion.div
+                  key={date.id}
+                  onClick={() => fetchGiftSuggestions(date)}
+                  whileTap={{ scale: 0.98 }}
+                  className={`flex-shrink-0 w-[220px] bg-parchment border border-stone rounded-[20px] p-5 snap-start cursor-pointer relative overflow-hidden ${
+                    date.daysUntil <= 1 ? 'border-l-[4px] border-l-rose-urgent' : 
+                    date.daysUntil <= 7 ? 'border-l-[4px] border-l-brass' : ''
+                  }`}
+                >
+                  {date.daysUntil <= 1 && (
+                    <motion.div 
+                      animate={{ 
+                        boxShadow: [
+                          "inset 0 0 0px rgba(196, 123, 106, 0)",
+                          "inset 0 0 20px rgba(196, 123, 106, 0.2)",
+                          "inset 0 0 0px rgba(196, 123, 106, 0)"
+                        ]
+                      }}
+                      transition={{ duration: 2, repeat: Infinity }}
+                      className="absolute inset-0 pointer-events-none"
+                    />
+                  )}
+                  <div className="relative z-10">
+                    <div className="flex justify-between items-start mb-2">
+                      <span className="text-2xl">{date.emoji}</span>
+                      <Gift size={16} className="text-stone" />
+                    </div>
+                    <div className="font-serif text-[48px] text-charcoal leading-none mb-1">
+                      {date.daysUntil}
+                    </div>
+                    <div className="font-outfit text-[12px] text-warm-grey">
+                      days until {date.name}
+                    </div>
+                  </div>
+                </motion.div>
+              ))}
+            </div>
+          </Section>
         )}
 
-        {/* ── Quick Actions ─────────────────────────────────────────────── */}
-        <motion.section
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.65, type: "spring", stiffness: 240, damping: 22 }}
-        >
-          <p className="text-[10px] font-bold uppercase tracking-[0.18em] mb-3" style={{ color: `${GOLD}80` }}>Quick Access</p>
-          <div className="flex gap-2.5 overflow-x-auto pb-1 no-scrollbar">
-            {quickActions.map(({ icon, label, nav }, i) => (
-              <motion.button
-                key={label}
-                initial={{ opacity: 0, y: 12, scale: 0.9 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                transition={{ delay: 0.7 + i * 0.06, type: "spring", stiffness: 300 }}
-                whileHover={{ y: -3, scale: 1.05 }}
-                whileTap={{ scale: 0.93 }}
-                onClick={() => onNavigate(nav)}
-                className="flex flex-col items-center gap-1.5 flex-shrink-0 px-4 py-3 bg-white rounded-2xl border border-black/[0.04] shadow-sm min-w-[68px]"
-              >
-                <span
-                  className="material-symbols-outlined text-[20px]"
-                  style={{ color: GOLD, fontVariationSettings: "'FILL' 0" }}
-                >
-                  {icon}
-                </span>
-                <span className="text-[10px] font-medium text-[#6B6560] whitespace-nowrap leading-none">{label}</span>
-              </motion.button>
-            ))}
-          </div>
-        </motion.section>
+        {/* Anniversary Memory Card */}
+        {isAnniversary && earliestMemory && (
+          <Section delay={0.035}>
+            <Card className="p-0 overflow-hidden border-brass/40">
+              <div className="relative aspect-video">
+                <img 
+                  src={earliestMemory.imageUrl} 
+                  alt="" 
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-charcoal/80 to-transparent flex flex-col justify-end p-6">
+                  <p className="font-outfit text-[12px] text-white/70 uppercase tracking-widest mb-1">
+                    On this day {differenceInYears(new Date(), earliestMemory.date?.toDate() || new Date())} years ago...
+                  </p>
+                  <p className="font-serif text-[20px] text-white italic">
+                    {earliestMemory.caption || "Where it all began."}
+                  </p>
+                </div>
+              </div>
+            </Card>
+          </Section>
+        )}
 
-        {/* ── Today's date footer ───────────────────────────────────────── */}
-        <motion.p
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 1 }}
-          className="text-center font-serif italic text-[11px] pt-2"
-          style={{ color: `${GOLD}50` }}
-        >
-          {format(new Date(), "EEEE, MMMM d")}
-        </motion.p>
-      </main>
+        {/* Mood Check-in / Status */}
+        <Section delay={0.04}>
+          <AnimatePresence mode="wait">
+            {!myMood ? (
+              <motion.div
+                key="check-in"
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.9, transition: { type: "spring", stiffness: 300, damping: 25 } }}
+                className="bg-parchment border border-stone rounded-[24px] p-6 shadow-sm"
+              >
+                <p className="font-outfit text-[13px] text-warm-grey mb-4">How are you feeling today?</p>
+                <div className="flex justify-between items-center">
+                  {MOOD_EMOJIS.map((emoji, i) => (
+                    <button
+                      key={i}
+                      onClick={() => handleMoodCheckIn(i)}
+                      className="w-11 h-11 flex items-center justify-center text-2xl hover:bg-linen rounded-full transition-colors active:scale-90"
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              </motion.div>
+            ) : (
+              <motion.div
+                key="mood-pill"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="flex justify-center"
+              >
+                <div className="bg-parchment border border-stone rounded-full px-[14px] py-[6px] flex items-center gap-3 shadow-sm">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-lg">{MOOD_EMOJIS[myMood.mood - 1]}</span>
+                    {partnerMood ? (
+                      <span className="text-lg">{MOOD_EMOJIS[partnerMood.mood - 1]}</span>
+                    ) : (
+                      <div className="w-5 h-5 rounded-full border border-stone border-dashed flex items-center justify-center">
+                        <Heart size={10} className="text-stone" />
+                      </div>
+                    )}
+                  </div>
+                  <span className="font-outfit text-[12px] text-warm-grey">
+                    {partnerMood ? "Today's vibes" : "Waiting for partner..."}
+                  </span>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </Section>
+
+        {/* Section 2: Partner Status Card */}
+        <Section delay={0.08}>
+          <Card className="p-5 flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className="relative">
+                <img 
+                  src={partnerData?.photoURL || `https://ui-avatars.com/api/?name=${partnerData?.displayName || 'P'}&background=EDE8DF&color=1A1A1A`}
+                  alt=""
+                  className="w-12 h-12 rounded-full object-cover border border-stone"
+                  referrerPolicy="no-referrer"
+                />
+                <div 
+                  className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-parchment ${partnerData?.isOnline ? 'bg-green-500' : 'bg-stone'}`}
+                />
+              </div>
+              <div>
+                <h2 className="font-serif text-xl text-charcoal">
+                  {partnerData?.displayName || "Partner"}
+                </h2>
+                <p className="font-outfit text-xs text-warm-grey">
+                  {partnerData?.isOnline ? "Online now" : lastSeenText}
+                </p>
+              </div>
+            </div>
+          </Card>
+        </Section>
+
+        {/* Proactive Alerts Row */}
+        {alerts.length > 0 && (
+          <Section delay={0.12} className="!px-0">
+            <div className="flex gap-3 overflow-x-auto no-scrollbar px-5 pb-2">
+              {alerts.map((alert) => (
+                <motion.div
+                  key={alert.id}
+                  layout
+                  initial={{ opacity: 0, scale: 0.9, x: 20 }}
+                  animate={{ opacity: 1, scale: 1, x: 0 }}
+                  exit={{ opacity: 0, scale: 0.9, x: -20 }}
+                  onClick={() => handleAlertClick(alert)}
+                  className="relative min-w-[260px] flex-shrink-0 p-4 rounded-[16px] border flex items-center gap-4 cursor-pointer active:scale-[0.98] transition-transform shadow-sm"
+                  style={{
+                    background: alert.priority === 'high' ? '#F5E6E0' : '#EDE8DF',
+                    borderColor: alert.priority === 'high' ? '#C47B6A' : '#D4CEC4'
+                  }}
+                >
+                  <span className="text-2xl flex-shrink-0">
+                    {alert.type === 'bill' && '💸'}
+                    {alert.type === 'grocery' && '🛒'}
+                    {alert.type === 'budget' && '📉'}
+                    {alert.type === 'datenight' && '💝'}
+                    {alert.type === 'chore' && '🧹'}
+                    {alert.type === 'anniversary' && '🎉'}
+                    {alert.type === 'birthday' && '🎂'}
+                    {alert.type === 'savings' && '🎯'}
+                  </span>
+                  <p className="font-outfit text-[13px] text-[#1A1A1A] leading-[1.4] pr-4 flex-1">
+                    {alert.message}
+                  </p>
+                  <button
+                    onClick={(e) => handleDismissAlert(alert.id, e)}
+                    className="absolute top-2 right-2 p-1 text-[#6B6560] hover:text-[#1A1A1A] transition-colors"
+                  >
+                    <X size={14} />
+                  </button>
+                </motion.div>
+              ))}
+            </div>
+          </Section>
+        )}
+
+        {/* Section 3: Bento Summary Grid */}
+        <Section delay={0.16}>
+          <div className="grid grid-cols-12 gap-4 h-[200px]">
+            {/* Large card left: Next Event */}
+            <Card 
+              onClick={() => onNavigate('calendar')}
+              className="col-span-7 p-5 flex flex-col justify-between cursor-pointer hover:bg-[#EDE8DF] transition-colors"
+            >
+              <p className="font-outfit text-[11px] uppercase tracking-wider text-warm-grey">Next Event</p>
+              {nextEvent ? (
+                <div className="space-y-1">
+                  <h3 className="font-serif text-lg text-charcoal line-clamp-2">{nextEvent.title}</h3>
+                  <p className="font-outfit text-[13px] text-brass">
+                    {ensureDate(nextEvent.date) ? format(ensureDate(nextEvent.date)!, "h:mm a") : ""}
+                  </p>
+                </div>
+              ) : (
+                <EmptyState text="Nothing yet" />
+              )}
+            </Card>
+
+            <div className="col-span-5 flex flex-col gap-4">
+              {/* Small card top right: Groceries */}
+              <Card 
+                onClick={() => onNavigate('grocery')}
+                className="flex-1 p-4 flex flex-col justify-center items-center text-center cursor-pointer hover:bg-[#EDE8DF] transition-colors"
+              >
+                <span className="font-serif text-3xl text-charcoal">{groceryCount}</span>
+                <span className="font-outfit text-[12px] text-warm-grey">items left</span>
+              </Card>
+              {/* Small card bottom right: Spend */}
+              <Card 
+                onClick={() => onNavigate('finances')}
+                className="flex-1 p-4 flex flex-col justify-center items-center text-center cursor-pointer hover:bg-[#EDE8DF] transition-colors"
+              >
+                <span className="font-serif text-2xl text-charcoal">${monthlySpend}</span>
+                <span className="font-outfit text-[12px] text-warm-grey">this month</span>
+              </Card>
+            </div>
+          </div>
+        </Section>
+
+        {/* Section 4: Last Memory */}
+        <Section delay={0.24}>
+          <Card onClick={() => onNavigate('together')} className="group cursor-pointer">
+            <div className="aspect-[16/6] w-full relative bg-stone overflow-hidden">
+              {lastMemory ? (
+                <img 
+                  src={lastMemory.imageUrl} 
+                  alt="" 
+                  className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center bg-stone/20">
+                  <EmptyState text="Add your first memory together" />
+                </div>
+              )}
+            </div>
+            {lastMemory && (
+              <div className="p-4">
+                <p className="font-outfit text-sm text-warm-grey line-clamp-1 italic">
+                  "{lastMemory.caption}"
+                </p>
+              </div>
+            )}
+          </Card>
+        </Section>
+
+        {/* Section 5: Partner's Last Note */}
+        <Section delay={0.32}>
+          <Card className="p-8 relative min-h-[160px] flex flex-col justify-center">
+            <span className="absolute top-4 left-4 font-serif text-[80px] text-brass-light leading-none select-none opacity-50">
+              “
+            </span>
+            <div className="relative z-10 space-y-4">
+              {lastNote ? (
+                <>
+                  <p className="font-serif italic text-lg text-charcoal leading-relaxed">
+                    {lastNote.text}
+                  </p>
+                  <p className="font-outfit text-[13px] text-brass">
+                    — {lastNote.authorName || partnerData?.displayName || "Partner"}
+                  </p>
+                </>
+              ) : (
+                <EmptyState text="Nothing yet — send something" />
+              )}
+            </div>
+          </Card>
+        </Section>
+
+        {/* Section 6: Relationship Insights */}
+        <Section delay={0.4} className="pb-12">
+          <div className="mb-4">
+            <p className="font-outfit text-[11px] tracking-[2px] uppercase text-brass font-medium">
+              Relationship Insights
+            </p>
+          </div>
+
+          <AnimatePresence mode="wait">
+            {loadingInsights ? (
+              <motion.div 
+                key="loading"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="space-y-4"
+              >
+                {[1, 2].map(i => (
+                  <div key={i} className="bg-[#EDE8DF] border border-[#D4CEC4] rounded-[20px] p-5 animate-pulse">
+                    <div className="flex gap-4">
+                      <div className="w-10 h-10 bg-[#D4CEC4] rounded-full" />
+                      <div className="flex-1 space-y-2">
+                        <div className="h-4 bg-[#D4CEC4] rounded w-1/3" />
+                        <div className="h-3 bg-[#D4CEC4] rounded w-full" />
+                        <div className="h-3 bg-[#D4CEC4] rounded w-2/3" />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </motion.div>
+            ) : insights && insights.length > 0 ? (
+              <motion.div 
+                key="insights"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="space-y-4"
+              >
+                {insights.map((insight, i) => (
+                  <div 
+                    key={i} 
+                    className="bg-[#EDE8DF] border border-[#D4CEC4] rounded-[20px] p-5 shadow-sm"
+                  >
+                    <div className="flex items-start gap-4">
+                      <span className="text-2xl flex-shrink-0">{insight.emoji}</span>
+                      <div className="space-y-1.5">
+                        <h3 className="font-serif text-[17px] text-[#1A1A1A] leading-tight font-bold">
+                          {insight.title}
+                        </h3>
+                        <p className="font-outfit text-[13px] text-[#6B6560] leading-[1.5]">
+                          {insight.body}
+                        </p>
+                        {insight.action && (
+                          <p className="font-outfit text-[12px] text-brass italic mt-2">
+                            {insight.action}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </motion.div>
+            ) : (
+              <motion.div 
+                key="empty"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="text-center py-8"
+              >
+                <p className="font-outfit text-sm text-[#6B6560] italic">
+                  Use the app for a few days and we'll surface insights about your life together
+                </p>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </Section>
+
+        {/* Section 7: Weekly Summary */}
+        {(weeklySummary || loadingSummary) && isSunday(new Date()) && (
+          <Section delay={0.48} className="pb-12">
+            <Card className="p-6 relative overflow-hidden bg-[#EDE8DF] border-[#D4CEC4] rounded-[24px]">
+              <button 
+                onClick={handleDismissSummary}
+                className="absolute top-4 right-4 p-2 text-warm-grey hover:text-charcoal transition-colors z-10"
+              >
+                <X size={18} />
+              </button>
+
+              <div className="flex items-center justify-between mb-6">
+                <p className="font-outfit text-[11px] tracking-[2px] uppercase text-brass font-medium">
+                  This Week
+                </p>
+                <p className="font-outfit text-[11px] text-warm-grey">
+                  {weeklySummary ? `${format(weeklySummary.weekStart.toDate(), "MMM d")} - ${format(weeklySummary.weekEnd.toDate(), "MMM d")}` : "..."}
+                </p>
+              </div>
+
+              {loadingSummary ? (
+                <div className="space-y-6">
+                  <div className="flex gap-3 overflow-x-auto no-scrollbar">
+                    {[1, 2, 3].map(i => (
+                      <div key={i} className="h-8 w-24 bg-white/50 rounded-full animate-pulse flex-shrink-0" />
+                    ))}
+                  </div>
+                  <div className="space-y-2">
+                    <div className="h-4 bg-charcoal/5 rounded w-full animate-pulse" />
+                    <div className="h-4 bg-charcoal/5 rounded w-5/6 animate-pulse" />
+                    <div className="h-4 bg-charcoal/5 rounded w-4/6 animate-pulse" />
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="flex gap-3 overflow-x-auto pb-2 no-scrollbar snap-x">
+                    <div className="bg-white px-4 py-1.5 rounded-full flex items-center gap-2 flex-shrink-0 snap-start shadow-sm">
+                      <span className="text-sm">💰</span>
+                      <span className="font-outfit text-[13px] text-charcoal font-medium">${weeklySummary?.stats.spent.toFixed(0)}</span>
+                    </div>
+                    <div className="bg-white px-4 py-1.5 rounded-full flex items-center gap-2 flex-shrink-0 snap-start shadow-sm">
+                      <span className="text-sm">✅</span>
+                      <span className="font-outfit text-[13px] text-charcoal font-medium">
+                        {Object.values(weeklySummary?.stats.choresCompleted || {}).reduce((a, b) => a + b, 0)} chores
+                      </span>
+                    </div>
+                    <div className="bg-white px-4 py-1.5 rounded-full flex items-center gap-2 flex-shrink-0 snap-start shadow-sm">
+                      <span className="text-sm">📸</span>
+                      <span className="font-outfit text-[13px] text-charcoal font-medium">{weeklySummary?.stats.memoriesCount} memories</span>
+                    </div>
+                    <div className="bg-white px-4 py-1.5 rounded-full flex items-center gap-2 flex-shrink-0 snap-start shadow-sm">
+                      <span className="text-sm">🛒</span>
+                      <span className="font-outfit text-[13px] text-charcoal font-medium">{weeklySummary?.stats.groceriesCompleted} items</span>
+                    </div>
+                  </div>
+
+                  <p className="font-serif italic text-[16px] text-charcoal leading-relaxed mt-6">
+                    {weeklySummary?.narrative || "Start using OurSpace this week and we'll write your first weekly story on Sunday"}
+                  </p>
+                </>
+              )}
+            </Card>
+          </Section>
+        )}
+      </div>
+      {/* Gift Suggestions Sheet */}
+      <BottomSheet 
+        isOpen={!!selectedDateForGifts} 
+        onClose={() => setSelectedDateForGifts(null)}
+        title={`${selectedDateForGifts?.name} Gift Ideas`}
+      >
+        <div className="space-y-4 pb-8">
+          {loadingGifts ? (
+            <div className="flex flex-col items-center py-12 space-y-4">
+              <div className="w-8 h-8 border-2 border-brass border-t-transparent rounded-full animate-spin" />
+              <p className="font-outfit text-sm text-warm-grey italic">Gemini is finding thoughtful ideas...</p>
+            </div>
+          ) : (
+            giftSuggestions.map((gift, i) => (
+              <motion.div
+                key={i}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.1 }}
+                className="bg-parchment border border-stone rounded-[20px] p-5 flex gap-4"
+              >
+                <span className="text-3xl flex-shrink-0">{gift.emoji}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex justify-between items-start mb-1">
+                    <h3 className="font-serif text-[16px] text-charcoal leading-tight">{gift.name}</h3>
+                    <div className="bg-brass/10 px-2 py-0.5 rounded-full">
+                      <span className="font-outfit text-[10px] text-brass font-bold uppercase">{gift.estimatedCost}</span>
+                    </div>
+                  </div>
+                  <p className="font-outfit text-[13px] text-warm-grey leading-relaxed">
+                    {gift.description}
+                  </p>
+                </div>
+              </motion.div>
+            ))
+          )}
+        </div>
+      </BottomSheet>
+
+      {/* Birthday Animation Overlay */}
+      {isPartnerBirthday && (
+        <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden">
+          {[...Array(15)].map((_, i) => (
+            <motion.div
+              key={i}
+              initial={{ y: "110vh", x: `${Math.random() * 100}vw`, opacity: 0 }}
+              animate={{ 
+                y: "-10vh", 
+                opacity: [0, 0.4, 0],
+                x: `${Math.random() * 100}vw`
+              }}
+              transition={{ 
+                duration: 10 + Math.random() * 10, 
+                repeat: Infinity, 
+                delay: Math.random() * 10,
+                ease: "linear"
+              }}
+              className="absolute w-2 h-2 rounded-full bg-brass/30 blur-sm"
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
