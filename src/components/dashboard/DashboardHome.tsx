@@ -757,6 +757,10 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
           transition={{ duration: 15, repeat: Infinity, ease: "linear" }}
           className="w-full h-full opacity-40 blur-[100px]"
         />
+        <div 
+          className="absolute inset-0 opacity-[0.03] mix-blend-overlay pointer-events-none" 
+          style={{ backgroundImage: "var(--noise-url)" }} 
+        />
       </div>
 
       {/* Section 1: Time-aware Header */}

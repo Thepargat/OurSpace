@@ -34,6 +34,7 @@
   --glass-border: rgba(255, 255, 255, 0.5);
   --glass-blur: blur(12px);
   --glass-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
+  --noise-url: url('/noise.svg');
 
   /* Animation Keyframes */
   @keyframes mesh {
