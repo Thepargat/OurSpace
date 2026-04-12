@@ -28,7 +28,7 @@ export class ErrorBoundary extends Component<Props, State> {
         <div style={{
           display: 'flex', flexDirection: 'column', alignItems: 'center',
           justifyContent: 'center', height: '100vh', padding: '24px',
-          background: '#F8F4EE', color: '#1A1A1A', textAlign: 'center',
+          background: '#fcf9f4', color: '#1A1A1A', textAlign: 'center',
           fontFamily: 'system-ui, sans-serif'
         }}>
           <h1 style={{ fontSize: '24px', marginBottom: '16px' }}>Oops, something broke.</h1>

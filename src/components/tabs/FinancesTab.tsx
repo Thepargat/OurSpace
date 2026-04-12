@@ -362,7 +362,7 @@ function ReceiptCard({
                     <span className="text-[14px]">{itemCat.emoji}</span>
                     <span className="flex-1 font-outfit text-[13px] text-[#1A1A1A] truncate">{item.name}</span>
                     {item.assignedTo !== 'shared' && (
-                      <span className="font-outfit text-[10px] text-[#6B6560] bg-[#F8F4EE] px-2 py-0.5 rounded-full">
+                      <span className="font-outfit text-[10px] text-[#6B6560] bg-[#fcf9f4] px-2 py-0.5 rounded-full">
                         {item.assignedTo === 'user' ? 'You' : (partnerData?.displayName?.split(' ')[0] || 'Partner')}
                       </span>
                     )}
@@ -424,7 +424,7 @@ function CategoryDrillDown({
       animate={{ x: 0 }}
       exit={{ x: '100%' }}
       transition={SPRING_DEFAULT}
-      className="fixed inset-0 z-[200] bg-[#F8F4EE] flex flex-col"
+      className="fixed inset-0 z-[200] bg-[#fcf9f4] flex flex-col"
       style={{ paddingTop: 'env(safe-area-inset-top)' }}
     >
       {/* Header */}
@@ -567,7 +567,7 @@ function ScanReceiptSheet({
         animate={{ y: 0 }}
         exit={{ y: '100%' }}
         transition={SPRING_DEFAULT}
-        className="bg-[#F8F4EE] rounded-t-[28px] w-full max-h-[90dvh] flex flex-col"
+        className="bg-[#fcf9f4] rounded-t-[28px] w-full max-h-[90dvh] flex flex-col"
       >
         <div className="px-6 pt-5 pb-4 flex items-center justify-between flex-shrink-0">
           <h2 className="font-serif text-[20px] text-[#1A1A1A]">Scan Receipt</h2>
@@ -891,7 +891,7 @@ export default function FinancesTab() {
   return (
     <div
       style={{
-        height: 'calc(100dvh - 80px)',
+        height: 'calc(100dvh - 76px)',
         overflowY: 'auto',
         overflowX: 'hidden',
         background: colors.linen,
@@ -946,7 +946,7 @@ export default function FinancesTab() {
               {activeTab === tab && (
                 <motion.div
                   layoutId="finance-tab-indicator"
-                  className="absolute inset-0 bg-[#F8F4EE] rounded-xl shadow-sm"
+                  className="absolute inset-0 bg-[#fcf9f4] rounded-xl shadow-sm"
                   transition={SPRING_DEFAULT}
                 />
               )}
@@ -1296,7 +1296,7 @@ export default function FinancesTab() {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9 }}
               transition={SPRING_BOUNCY}
-              className="fixed top-20 right-5 z-[200] bg-[#F8F4EE] border border-[#D4CEC4] rounded-2xl shadow-xl overflow-hidden"
+              className="fixed top-20 right-5 z-[200] bg-[#fcf9f4] border border-[#D4CEC4] rounded-2xl shadow-xl overflow-hidden"
             >
               {[
                 { label: '📤 Import Bank Statement', action: () => { setShowMenu(false); setShowBankImport(true); } },

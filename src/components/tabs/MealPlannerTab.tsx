@@ -206,14 +206,14 @@ export default function MealPlannerTab({ onBack }: { onBack: () => void }) {
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center bg-[#F8F4EE]">
+      <div className="flex h-full items-center justify-center bg-[#fcf9f4]">
         <Loader2 className="h-8 w-8 animate-spin text-[#B8955A]" />
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col h-full bg-[#F8F4EE]">
+    <div className="flex flex-col h-full bg-[#fcf9f4]">
       {/* Header */}
       <div className="px-6 pt-16 pb-6">
         <div className="flex items-center gap-4 mb-8">

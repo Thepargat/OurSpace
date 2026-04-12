@@ -266,7 +266,7 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
 
   if (authState.loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#F8F4EE]">
+      <div className="flex min-h-screen items-center justify-center bg-[#fcf9f4]">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#D4CEC4] border-t-[#B8955A]" />
       </div>
     );
@@ -279,7 +279,7 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
       <div 
         style={{
           minHeight: "100dvh",
-          background: "#F8F4EE",
+          background: "#fcf9f4",
           display: "flex",
           flexDirection: "column",
           alignItems: "center",

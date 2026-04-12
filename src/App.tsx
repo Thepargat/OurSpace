@@ -1,3 +1,4 @@
+// Design System Overhaul - Force Reload 2
 import { useState, useEffect } from "react";
 import Lenis from 'lenis';
 import { AnimatePresence, motion } from "framer-motion";
@@ -7,6 +8,7 @@ import { doc, onSnapshot, getDocs, updateDoc, collection, query, where, Timestam
 import { db, auth } from "./firebase";
 import AuthWrapper, { useAuth } from "./components/AuthWrapper";
 import { requestNotificationPermission, onForegroundMessage, notifyPartner, updateFCMToken } from "./services/notificationService";
+import { startPresenceTracking } from "./services/presenceService";
 import { addMinutes } from "date-fns";
 import NoiseOverlay from "./components/NoiseOverlay";
 import BottomNav from "./components/BottomNav";
@@ -56,7 +58,7 @@ function MainApp() {
   const [inAppNotification, setInAppNotification] = useState<{ title: string, body: string, data?: any } | null>(null);
   const [showIOSInstall, setShowIOSInstall] = useState(false);
 
-  // Session Tracking
+  // Session Tracking & Presence
   useEffect(() => {
     const sessions = parseInt(localStorage.getItem('ourspace_sessions') || '0');
     const newSessions = sessions + 1;
@@ -65,6 +67,14 @@ function MainApp() {
     if (user) {
       updateFCMToken(user.uid);
     }
+  }, [user]);
+
+  // Presence tracking — mark user as online/offline in Firestore
+  useEffect(() => {
+    if (!user) return;
+    let cleanup: (() => void) | undefined;
+    startPresenceTracking(user.uid).then(fn => { cleanup = fn; });
+    return () => { cleanup?.(); };
   }, [user]);
 
   useEffect(() => {
@@ -382,7 +392,7 @@ function MainApp() {
   }, [activeTab, showLaunchScreen]);
 
   useEffect(() => {
-    const themeColor = activeTab === 'home' ? '#F8F4EE' : '#F8F4EE'; // Could vary by tab
+    const themeColor = activeTab === 'home' ? '#fcf9f4' : '#fcf9f4'; // Could vary by tab
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', themeColor);
   }, [activeTab]);
 
@@ -403,13 +413,23 @@ function MainApp() {
       }
     }
 
+    // Support DashboardHome navigating to specific sub-screens
+    const handleDashboardNavigate = (target: string) => {
+      const subScreenTargets = ['grocery', 'meal-planner', 'chores', 'notes', 'savings', 'mood-history', 'settings', 'subscriptions', 'home-car', 'activity'];
+      if (subScreenTargets.includes(target)) {
+        setSubScreen(target);
+      } else {
+        setActiveTab(target);
+      }
+    };
+
     switch (activeTab) {
-      case "home": return <HomeTab key="home" isAnniversary={isAnniversary} onNavigate={setActiveTab} />;
+      case "home": return <HomeTab key="home" isAnniversary={isAnniversary} onNavigate={handleDashboardNavigate} />;
       case "calendar": return <CalendarTab key="calendar" />;
       case "finances": return <FinancesTab key="finances" />;
       case "together": return <TogetherTab key="together" />;
       case "more": return <MoreTab key="more" onNavigate={setSubScreen} />;
-      default: return <HomeTab key="home" isAnniversary={isAnniversary} onNavigate={setActiveTab} />;
+      default: return <HomeTab key="home" isAnniversary={isAnniversary} onNavigate={handleDashboardNavigate} />;
     }
   };
 
@@ -440,7 +460,7 @@ function MainApp() {
   return (
     <>
       {isFirstLoadOffline && (
-        <div className="fixed inset-0 z-[20000] bg-[#F8F4EE] flex flex-col items-center justify-center text-center px-8">
+        <div className="fixed inset-0 z-[20000] bg-[#fcf9f4] flex flex-col items-center justify-center text-center px-8">
           <div className="w-20 h-20 bg-[#B8955A] rounded-[24px] flex items-center justify-center mb-8 shadow-xl">
             <span className="font-serif text-white text-3xl font-bold">OS</span>
           </div>
@@ -596,15 +616,15 @@ function MainApp() {
       <NoiseOverlay />
       <OnlineParticles isAnniversary={isAnniversary} bothOnline={true} />
       <ProgressBar isLoading={isLoading} />
-      <div style={{ height: '100dvh', display: 'flex', flexDirection: 'column', background: '#F8F4EE' }} className="relative w-full">
+      <div style={{ height: '100dvh', display: 'flex', flexDirection: 'column', background: '#fcf9f4' }} className="relative w-full">
         <AnimatePresence mode="wait">
           <motion.div
             key={subScreen || activeTab}
-            initial={isSubScreen ? { x: "100%" } : { opacity: 0 }}
-            animate={isSubScreen ? { x: 0 } : { opacity: 1 }}
-            exit={isSubScreen ? { x: "100%" } : { opacity: 0 }}
-            transition={{ type: "spring", stiffness: 300, damping: 30 }}
-            className="flex-1 relative"
+            initial={isSubScreen ? { x: "100%", opacity: 0 } : { opacity: 0, scale: 0.985 }}
+            animate={isSubScreen ? { x: 0, opacity: 1 } : { opacity: 1, scale: 1 }}
+            exit={isSubScreen ? { x: "100%", opacity: 0 } : { opacity: 0, scale: 0.985 }}
+            transition={{ type: "spring", stiffness: 320, damping: 32 }}
+            className="flex-1 relative overflow-hidden"
           >
             {renderContent()}
           </motion.div>
@@ -638,7 +658,7 @@ function MainApp() {
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-[#F8F4EE] rounded-[24px] p-8 w-full max-w-sm border border-[#D4CEC4]"
+              className="bg-[#fcf9f4] rounded-[24px] p-8 w-full max-w-sm border border-[#D4CEC4]"
             >
               <h1 className="font-serif text-[28px] text-[#1A1A1A] mb-2 text-center">New Invite!</h1>
               <p className="font-outfit text-[#6B6560] text-center mb-8">

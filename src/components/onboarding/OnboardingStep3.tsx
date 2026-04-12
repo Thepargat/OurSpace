@@ -209,7 +209,7 @@ export default function OnboardingStep3({ onNext }: OnboardingStep3Props) {
       transition={{ type: "spring", stiffness: 280, damping: 26 }}
       style={{
         minHeight: "100dvh",
-        background: "#F8F4EE",
+        background: "#fcf9f4",
         display: "flex",
         flexDirection: "column",
         justifyContent: "space-between",

@@ -121,7 +121,7 @@ function AddSubscriptionSheet({
         animate={{ y: 0 }}
         exit={{ y: '100%' }}
         transition={SPRING_DEFAULT}
-        className="bg-[#F8F4EE] rounded-t-[28px] w-full max-h-[85dvh] flex flex-col"
+        className="bg-[#fcf9f4] rounded-t-[28px] w-full max-h-[85dvh] flex flex-col"
       >
         <div className="px-6 pt-5 pb-4 flex items-center justify-between flex-shrink-0">
           <div>
@@ -293,7 +293,7 @@ export default function SubscriptionsScreen({ onBack }: { onBack: () => void }) 
       animate={{ x: 0 }}
       exit={{ x: '100%' }}
       transition={SPRING_DEFAULT}
-      className="fixed inset-0 z-[150] bg-[#F8F4EE] flex flex-col"
+      className="fixed inset-0 z-[150] bg-[#fcf9f4] flex flex-col"
       style={{ paddingTop: 'env(safe-area-inset-top)' }}
     >
       {/* Header */}

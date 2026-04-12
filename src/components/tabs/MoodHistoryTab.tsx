@@ -63,7 +63,7 @@ export default function MoodHistoryTab({ onBack }: MoodHistoryTabProps) {
   }).reverse();
 
   return (
-    <div className="min-h-screen bg-[#F8F4EE] pb-20">
+    <div className="min-h-screen bg-[#fcf9f4] pb-20">
       <header className="pt-16 pb-6 px-6 flex items-center gap-4">
         <button onClick={onBack} className="p-2 -ml-2 text-[#6B6560]">
           <ChevronLeft size={24} />

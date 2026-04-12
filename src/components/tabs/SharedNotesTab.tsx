@@ -164,7 +164,7 @@ export default function SharedNotesTab({ onBack }: { onBack: () => void }) {
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center bg-[#F8F4EE]">
+      <div className="flex h-full items-center justify-center bg-[#fcf9f4]">
         <Loader2 className="h-8 w-8 animate-spin text-[#B8955A]" />
       </div>
     );
@@ -172,7 +172,7 @@ export default function SharedNotesTab({ onBack }: { onBack: () => void }) {
 
   return (
     <div 
-      className="flex flex-col bg-[#F8F4EE] transition-all duration-300 ease-out"
+      className="flex flex-col bg-[#fcf9f4] transition-all duration-300 ease-out"
       style={{ 
         height: '100dvh',
         paddingBottom: keyboardHeight > 0 ? `${keyboardHeight}px` : 'env(safe-area-inset-bottom)'

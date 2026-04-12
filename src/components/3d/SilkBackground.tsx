@@ -31,7 +31,7 @@ function SilkMesh() {
 
   const uniforms = useMemo(() => ({
     uTime: { value: 0 },
-    uColor1: { value: new THREE.Color('#F8F4EE') },
+    uColor1: { value: new THREE.Color('#fcf9f4') },
     uColor2: { value: new THREE.Color('#EDE8DF') }
   }), []);
 
@@ -127,12 +127,12 @@ export default function SilkBackground() {
 
   if (hasError) {
     return (
-      <div className="absolute inset-0 z-0 opacity-60 pointer-events-none bg-gradient-to-br from-[#F8F4EE] to-[#EDE8DF] animate-pulse" />
+      <div className="absolute inset-0 z-0 opacity-60 pointer-events-none bg-gradient-to-br from-[#fcf9f4] to-[#EDE8DF] animate-pulse" />
     );
   }
 
   return (
-    <div className="absolute inset-0 z-0 opacity-60 pointer-events-none bg-gradient-to-br from-[#F8F4EE] to-[#EDE8DF]">
+    <div className="absolute inset-0 z-0 opacity-60 pointer-events-none bg-gradient-to-br from-[#fcf9f4] to-[#EDE8DF]">
       <Canvas 
         frameloop="demand" 
         camera={{ position: [0, 0, 3], fov: 45 }}

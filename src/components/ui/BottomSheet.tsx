@@ -75,7 +75,7 @@ export default function BottomSheet({ isOpen, onClose, children, title, footer, 
             animate={{ y }}
             exit={{ y: "100%" }}
             transition={y === 0 ? springs.soft : { type: "tween", duration: 0.1 }}
-            className="fixed bottom-0 left-0 right-0 z-[20001] flex flex-col rounded-t-[24px] bg-[#F8F4EE]"
+            className="fixed bottom-0 left-0 right-0 z-[20001] flex flex-col rounded-t-[24px] bg-[#fcf9f4]"
             style={{ 
               y, 
               maxHeight: fullScreen ? "100dvh" : "92dvh",
@@ -105,7 +105,7 @@ export default function BottomSheet({ isOpen, onClose, children, title, footer, 
 
             {/* Sticky save/confirm button pinned at bottom above safe area */}
             {footer && (
-              <div className="p-6 pb-[calc(16px+env(safe-area-inset-bottom))] border-t border-[#D4CEC4] bg-[#F8F4EE] flex-shrink-0">
+              <div className="p-6 pb-[calc(16px+env(safe-area-inset-bottom))] border-t border-[#D4CEC4] bg-[#fcf9f4] flex-shrink-0">
                 {footer}
               </div>
             )}

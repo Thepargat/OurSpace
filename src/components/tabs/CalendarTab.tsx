@@ -234,13 +234,13 @@ export default function CalendarTab() {
     <PageTransition>
       <div 
         style={{
-          height: 'calc(100dvh - 80px)',
+          height: 'calc(100dvh - 76px)',
           overflowY: 'auto',
           overflowX: 'hidden',
           WebkitOverflowScrolling: 'touch',
           overscrollBehavior: 'contain',
           paddingBottom: 'calc(100px + env(safe-area-inset-bottom))',
-          background: '#F8F4EE'
+          background: '#fcf9f4'
         }}
         className="flex flex-col no-scrollbar"
       >
@@ -446,7 +446,7 @@ export default function CalendarTab() {
                               </span>
                               {event.isShared && (
                                 <span className="flex items-center gap-1 text-[#B8955A] bg-[#B8955A]/10 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider">
-                                  <Globe size={10} /> Together
+                                  <Globe size={10} /> Shared
                                 </span>
                               )}
                             </div>
@@ -468,7 +468,7 @@ export default function CalendarTab() {
                               </div>
                             )}
                             {event.createdBy !== user?.uid && (
-                              <div className="w-5 h-5 rounded-full bg-[#D4CEC4] border border-[#F8F4EE]" />
+                              <div className="w-5 h-5 rounded-full bg-[#D4CEC4] border border-[#fcf9f4]" />
                             )}
                           </div>
                         </div>

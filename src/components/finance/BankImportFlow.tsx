@@ -171,7 +171,7 @@ export default function BankImportFlow({ onClose, onImported }: Props) {
         animate={{ y: 0 }}
         exit={{ y: '100%' }}
         transition={SPRING_DEFAULT}
-        className="bg-[#F8F4EE] rounded-t-[28px] w-full max-h-[92dvh] flex flex-col overflow-hidden"
+        className="bg-[#fcf9f4] rounded-t-[28px] w-full max-h-[92dvh] flex flex-col overflow-hidden"
       >
         {/* Header */}
         <div className="px-6 pt-6 pb-4 flex items-center justify-between flex-shrink-0">
@@ -321,7 +321,7 @@ export default function BankImportFlow({ onClose, onImported }: Props) {
                         className={`flex items-center gap-3 p-3 rounded-2xl border transition-colors cursor-pointer ${
                           tx.selected
                             ? 'bg-[#EDE8DF] border-[#D4CEC4]'
-                            : 'bg-[#F8F4EE] border-[#D4CEC4]/50 opacity-50'
+                            : 'bg-[#fcf9f4] border-[#D4CEC4]/50 opacity-50'
                         } ${tx.isDuplicate ? 'border-[#FF9800]/50' : ''}`}
                         onClick={() => setTransactions(prev =>
                           prev.map(t => t.id === tx.id ? { ...t, selected: !t.selected } : t)

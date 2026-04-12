@@ -224,7 +224,7 @@ function AddItemSheet({
             animate={{ y: 0 }}
             exit={{ y: '100%' }}
             transition={{ type: "spring", stiffness: 300, damping: 28 }}
-            className="fixed bottom-0 left-0 right-0 z-[9999] bg-[#F8F4EE] rounded-t-[24px] flex flex-col min-h-[40dvh] max-h-[92dvh] h-auto shadow-2xl"
+            className="fixed bottom-0 left-0 right-0 z-[9999] bg-[#fcf9f4] rounded-t-[24px] flex flex-col min-h-[40dvh] max-h-[92dvh] h-auto shadow-2xl"
           >
             {/* Drag handle */}
             <div className="w-full pt-3 pb-1 flex-shrink-0">
@@ -276,7 +276,7 @@ function AddItemSheet({
             </div>
 
             {/* Pinned Footer */}
-            <div className="p-6 pb-[calc(16px+env(safe-area-inset-bottom))] border-t border-[#D4CEC4] bg-[#F8F4EE] flex-shrink-0">
+            <div className="p-6 pb-[calc(16px+env(safe-area-inset-bottom))] border-t border-[#D4CEC4] bg-[#fcf9f4] flex-shrink-0">
               <button
                 disabled={!name.trim()}
                 onClick={handleAdd}
@@ -452,13 +452,13 @@ export default function GroceryTab({ onBack }: { onBack?: () => void }) {
     <PageTransition>
       <div 
         style={{
-          height: 'calc(100dvh - 80px)',
+          height: 'calc(100dvh - 76px)',
           overflowY: 'auto',
           overflowX: 'hidden',
           WebkitOverflowScrolling: 'touch',
           overscrollBehavior: 'contain',
           paddingBottom: 'calc(32px + env(safe-area-inset-bottom))',
-          background: '#F8F4EE'
+          background: '#fcf9f4'
         }}
         className="flex flex-col relative no-scrollbar"
       >

@@ -53,7 +53,7 @@ const SettingsRow = ({
       gap: "16px",
       padding: "0 20px",
       height: "56px",
-      background: "#F8F4EE",
+      background: "#fcf9f4",
       borderBottom: "1px solid #D4CEC4",
       cursor: "pointer"
     }}
@@ -283,7 +283,6 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
       (error) => {
         console.error("Upload error:", error);
         setIsUploading(false);
-        setUploadProgress(null);
       },
       async () => {
         try {
@@ -298,7 +297,6 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
           await updateProfile(user, { photoURL: downloadURL });
 
           setIsUploading(false);
-          setUploadProgress(null);
         } catch (err) {
           console.error("Profile update error:", err);
           setIsUploading(false);
@@ -346,18 +344,18 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
   return (
     <div 
       style={{
-        height: "calc(100dvh - 80px)",
+        height: "calc(100dvh - 76px)",
         overflowY: "auto",
         overflowX: "hidden",
         WebkitOverflowScrolling: "touch",
         overscrollBehavior: "contain",
         paddingBottom: "calc(80px + env(safe-area-inset-bottom))",
-        background: "#F8F4EE"
+        background: "#fcf9f4"
       }}
       className="settings-container no-scrollbar"
     >
       {/* Header */}
-      <div className="px-6 pt-16 pb-6 flex items-center gap-4 sticky top-0 bg-[#F8F4EE] z-10">
+      <div className="px-6 pt-16 pb-6 flex items-center gap-4 sticky top-0 bg-[#fcf9f4] z-10">
         <button onClick={onBack} className="p-2 -ml-2 text-[#1A1A1A]">
           <ChevronLeft size={24} />
         </button>
@@ -373,7 +371,7 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
           className="mb-8 p-6 bg-[#EDE8DF] rounded-[20px] border border-[#D4CEC4] flex flex-col items-center text-center"
         >
           <div className="relative mb-4 group">
-            <div className="w-[72px] h-[72px] rounded-full border-[3px] border-[#F8F4EE] overflow-hidden relative z-10 transition-transform group-active:scale-95">
+            <div className="w-[72px] h-[72px] rounded-full border-[3px] border-[#fcf9f4] overflow-hidden relative z-10 transition-transform group-active:scale-95">
               <img 
                 src={userData?.photoURL || user?.photoURL || ''} 
                 alt="Profile" 
@@ -389,7 +387,7 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
             
             <button 
               onClick={() => fileInputRef.current?.click()}
-              className="absolute bottom-0 right-0 w-7 h-7 bg-[#1A1A1A] rounded-full border-2 border-[#F8F4EE] z-20 flex items-center justify-center text-white shadow-lg active:scale-90 transition-transform"
+              className="absolute bottom-0 right-0 w-7 h-7 bg-[#1A1A1A] rounded-full border-2 border-[#fcf9f4] z-20 flex items-center justify-center text-white shadow-lg active:scale-90 transition-transform"
             >
               <Camera size={14} />
             </button>
@@ -548,7 +546,7 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
           transition={{ duration: 0.5, delay: 0.24 }}
         >
           <SectionLabel>Important Dates</SectionLabel>
-          <div className="bg-[#F8F4EE] rounded-[16px] border border-[#D4CEC4] overflow-hidden">
+          <div className="bg-[#fcf9f4] rounded-[16px] border border-[#D4CEC4] overflow-hidden">
             <div className="relative">
               <SettingsRow 
                 icon={CalendarHeart}
@@ -583,7 +581,7 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
           transition={{ duration: 0.5, delay: 0.28 }}
         >
           <SectionLabel>Integrations</SectionLabel>
-          <div className="bg-[#F8F4EE] rounded-[16px] border border-[#D4CEC4] overflow-hidden">
+          <div className="bg-[#fcf9f4] rounded-[16px] border border-[#D4CEC4] overflow-hidden">
             <SettingsRow 
               icon={Globe}
               label="Google Calendar"
@@ -628,7 +626,7 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
           transition={{ duration: 0.5, delay: 0.32 }}
         >
           <SectionLabel>Finances</SectionLabel>
-          <div className="bg-[#F8F4EE] rounded-[16px] border border-[#D4CEC4] overflow-hidden">
+          <div className="bg-[#fcf9f4] rounded-[16px] border border-[#D4CEC4] overflow-hidden">
             <SettingsRow 
               icon={Wallet}
               label="Monthly Budget"
@@ -645,7 +643,7 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
           transition={{ duration: 0.5, delay: 0.4 }}
         >
           <SectionLabel>Notifications</SectionLabel>
-          <div className="bg-[#F8F4EE] rounded-[16px] border border-[#D4CEC4] overflow-hidden">
+          <div className="bg-[#fcf9f4] rounded-[16px] border border-[#D4CEC4] overflow-hidden">
             <SettingsRow 
               icon={ShoppingCart}
               label="Partner activity"
@@ -691,7 +689,7 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
           transition={{ duration: 0.5, delay: 0.48 }}
         >
           <SectionLabel>App</SectionLabel>
-          <div className="bg-[#F8F4EE] rounded-[16px] border border-[#D4CEC4] overflow-hidden">
+          <div className="bg-[#fcf9f4] rounded-[16px] border border-[#D4CEC4] overflow-hidden">
             <SettingsRow 
               icon={Download}
               label="Install on home screen"

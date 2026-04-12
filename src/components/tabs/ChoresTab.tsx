@@ -121,7 +121,7 @@ export default function ChoresTab({ onBack }: { onBack: () => void }) {
 
   return (
     <PageTransition>
-      <div className="flex flex-col h-full bg-[#F8F4EE]">
+      <div className="flex flex-col h-full bg-[#fcf9f4]">
         <div className="px-6 pt-16 pb-6 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <button onClick={onBack} className="p-2 -ml-2 text-[#1A1A1A]">

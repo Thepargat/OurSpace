@@ -88,7 +88,7 @@ export default function OnboardingStep4({ onComplete }: OnboardingStep4Props) {
       transition={{ type: "spring", stiffness: 280, damping: 26 }}
       style={{
         minHeight: "100dvh",
-        background: "#F8F4EE",
+        background: "#fcf9f4",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
@@ -157,7 +157,7 @@ export default function OnboardingStep4({ onComplete }: OnboardingStep4Props) {
             width: "56px",
             height: "56px",
             borderRadius: "50%",
-            border: "3px solid #F8F4EE",
+            border: "3px solid #fcf9f4",
             position: "relative",
             zIndex: 2,
             objectFit: "cover"
@@ -181,7 +181,7 @@ export default function OnboardingStep4({ onComplete }: OnboardingStep4Props) {
             width: "56px",
             height: "56px",
             borderRadius: "50%",
-            border: "3px solid #F8F4EE",
+            border: "3px solid #fcf9f4",
             position: "relative",
             zIndex: 2,
             objectFit: "cover"

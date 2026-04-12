@@ -6,7 +6,7 @@
 // ============================================================
 export const colors = {
   // Backgrounds
-  linen: '#F8F4EE',       // main app background
+  linen: '#fcf9f4',       // main app background
   parchment: '#EDE8DF',   // card backgrounds
   stone: '#D4CEC4',       // borders and dividers
   warmWhite: '#FAFAF8',   // elevated surface (above cards)

@@ -147,7 +147,7 @@ export default function ActivityFeedScreen({ onBack }: Props) {
       animate={{ x: 0, opacity: 1 }}
       exit={{ x: '100%', opacity: 0 }}
       transition={SPRING_DEFAULT}
-      className="fixed inset-0 z-[150] bg-[#F8F4EE] flex flex-col"
+      className="fixed inset-0 z-[150] bg-[#fcf9f4] flex flex-col"
       style={{ paddingTop: 'env(safe-area-inset-top)' }}
     >
       {/* Header */}
