@@ -106,24 +106,44 @@ const ensureDate = (val: any): Date | null => {
   return isNaN(d.getTime()) ? null : d;
 };
 
-const Section = ({ children, delay = 0, className = "" }: { children: React.ReactNode, delay?: number, className?: string }) => (
+const Section = ({ children, delay = 0, className = "", id }: { children: React.ReactNode, delay?: number, className?: string, id?: string }) => (
   <motion.section 
+    layout
     {...fadeUp(delay)}
+    id={id}
     className={`w-full px-5 ${className}`}
   >
     {children}
   </motion.section>
 );
 
-const Card = ({ children, onClick, className = "" }: { children: React.ReactNode, onClick?: () => void, className?: string }) => (
+const Card = ({ children, onClick, className = "", layoutId }: { children: React.ReactNode, onClick?: () => void, className?: string, layoutId?: string }) => (
   <motion.div
-    whileHover={onClick ? cardHover : undefined}
+    layoutId={layoutId}
+    whileHover={onClick ? { ...cardHover, backgroundColor: "rgba(255, 255, 255, 0.6)" } : undefined}
     whileTap={onClick ? cardTap : undefined}
     onClick={onClick}
-    className={`bg-parchment border border-stone rounded-[20px] overflow-hidden ${onClick ? 'cursor-pointer' : ''} ${className}`}
+    className={`glass-card border border-stone/30 rounded-[28px] overflow-hidden ${onClick ? 'cursor-pointer' : ''} ${className}`}
+    style={{
+      background: "var(--glass-bg)",
+      backdropFilter: "var(--glass-blur)",
+      boxShadow: "var(--glass-shadow)"
+    }}
   >
     {children}
   </motion.div>
+);
+
+const LivePulse = ({ active }: { active: boolean }) => (
+  <div className="flex items-center gap-2 px-3 py-1 bg-white/40 backdrop-blur-md rounded-full border border-white/50 shadow-sm">
+    <div className="relative w-2 h-2">
+      <div className={`absolute inset-0 rounded-full bg-green-500 ${active ? 'animate-[pulse-live_2s_infinite]' : ''}`} />
+      <div className="absolute inset-0 rounded-full bg-green-500/40 blur-[2px]" />
+    </div>
+    <span className="font-outfit text-[10px] uppercase tracking-widest font-bold text-charcoal/60">
+      {active ? "Live Syncing" : "Connected"}
+    </span>
+  </div>
 );
 
 const EmptyState = ({ text }: { text: string }) => (
@@ -160,7 +180,9 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
   const [loadingGifts, setLoadingGifts] = useState(false);
   const [loadingInsights, setLoadingInsights] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [startY, setStartY] = useState(0);
+  const [pullOffset, setPullOffset] = useState(0);
 
   // --- Error Handler ---
   const handleError = (error: any, op: OperationType, path: string) => {
@@ -219,7 +241,9 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
     const userPath = `users/${user.uid}`;
     const unsubUser = onSnapshot(doc(db, "users", user.uid), 
       (snapshot) => {
+        setIsSyncing(true);
         setUserData(snapshot.data());
+        setTimeout(() => setIsSyncing(false), 800);
       },
       (err) => handleError(err, OperationType.GET, userPath)
     );
@@ -280,7 +304,9 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
             if (unsubPartner) unsubPartner();
             unsubPartner = onSnapshot(doc(db, "users", partnerId), 
               (pSnap) => {
+                setIsSyncing(true);
                 setPartnerData(pSnap.data() as PartnerData);
+                setTimeout(() => setIsSyncing(false), 800);
               },
               (err) => handleError(err, OperationType.GET, partnerPath)
             );
@@ -302,7 +328,11 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
           orderBy("date", "asc"),
           limit(1)
         ),
-        (snap) => setNextEvent(snap.docs[0]?.data() as EventData),
+        (snap) => {
+          setIsSyncing(true);
+          setNextEvent(snap.docs[0]?.data() as EventData);
+          setTimeout(() => setIsSyncing(false), 800);
+        },
         (err) => handleError(err, OperationType.LIST, eventsPath)
       );
 
@@ -313,7 +343,11 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
           collection(db, "households", userData.householdId, "groceries"),
           where("completed", "==", false)
         ),
-        (snap) => setGroceryCount(snap.size),
+        (snap) => {
+          setIsSyncing(true);
+          setGroceryCount(snap.size);
+          setTimeout(() => setIsSyncing(false), 800);
+        },
         (err) => handleError(err, OperationType.LIST, groceriesPath)
       );
 
@@ -329,7 +363,9 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
               return date && isSameMonth(date, new Date());
             })
             .reduce((acc, curr) => acc + (curr.amount || curr.total || 0), 0);
+          setIsSyncing(true);
           setMonthlySpend(total);
+          setTimeout(() => setIsSyncing(false), 800);
         },
         (err) => handleError(err, OperationType.LIST, expensesPath)
       );
@@ -342,7 +378,11 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
           orderBy("createdAt", "desc"),
           limit(1)
         ),
-        (snap) => setLastMemory(snap.docs[0]?.data() as MemoryData),
+        (snap) => {
+          setIsSyncing(true);
+          setLastMemory(snap.docs[0]?.data() as MemoryData);
+          setTimeout(() => setIsSyncing(false), 800);
+        },
         (err) => handleError(err, OperationType.LIST, memoriesPath)
       );
 
@@ -354,7 +394,11 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
           orderBy("createdAt", "desc"),
           limit(1)
         ),
-        (snap) => setLastNote(snap.docs[0]?.data() as NoteData),
+        (snap) => {
+          setIsSyncing(true);
+          setLastNote(snap.docs[0]?.data() as NoteData);
+          setTimeout(() => setIsSyncing(false), 800);
+        },
         (err) => handleError(err, OperationType.LIST, notesPath)
       );
 
@@ -576,9 +620,11 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
   }, [userData?.householdId, partnerData, user]);
 
   // --- Pull to Refresh Logic ---
+  const REFRESH_THRESHOLD = 80;
+
   const handleTouchStart = (e: React.TouchEvent) => {
     const container = e.currentTarget as HTMLDivElement;
-    if (container.scrollTop === 0) {
+    if (container.scrollTop <= 0) {
       setStartY(e.touches[0].pageY);
     }
   };
@@ -587,17 +633,31 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
     if (startY === 0) return;
     const y = e.touches[0].pageY;
     const dist = y - startY;
-    if (dist > 70 && !isRefreshing) {
-      setIsRefreshing(true);
-      fetchInsights(true).then(() => {
-        setIsRefreshing(false);
-        setStartY(0);
-      });
+    
+    if (dist > 0) {
+      // Dampened elastic effect: logarithmic-ish scaling
+      const dampenedDist = Math.pow(dist, 0.85) * 2;
+      setPullOffset(dampenedDist);
+      
+      // Prevent default scrolling when pulling
+      if (dist > 10 && e.cancelable) {
+        e.preventDefault();
+      }
     }
   };
 
   const handleTouchEnd = () => {
-    setStartY(0);
+    if (pullOffset > REFRESH_THRESHOLD && !isRefreshing) {
+      setIsRefreshing(true);
+      fetchInsights(true).then(() => {
+        setIsRefreshing(false);
+        setPullOffset(0);
+        setStartY(0);
+      });
+    } else {
+      setPullOffset(0);
+      setStartY(0);
+    }
   };
 
   const lastSeenText = useMemo(() => {
@@ -654,49 +714,88 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       style={{
-        height: 'calc(100dvh - 80px)',
+        height: 'calc(100dvh - 84px)',
         overflowY: 'auto',
         overflowX: 'hidden',
         WebkitOverflowScrolling: 'touch',
         overscrollBehavior: 'contain',
         paddingBottom: 'calc(32px + env(safe-area-inset-bottom))',
-        background: '#F8F4EE'
+        position: 'relative',
+        background: '#FAF9F6' // Slightly brighter linen for better glass contrast
       }}
       className="no-scrollbar"
     >
+      {/* Pull to Refresh Indicator */}
+      <div 
+        className="absolute top-0 left-0 right-0 flex justify-center z-50 pointer-events-none"
+        style={{ height: pullOffset }}
+      >
+        <motion.div 
+          animate={{ 
+            y: pullOffset > 20 ? 40 : -40,
+            opacity: pullOffset > 20 ? 1 : 0,
+            rotate: pullOffset * 2,
+            scale: isRefreshing ? [1, 1.1, 1] : pullOffset / REFRESH_THRESHOLD
+          }}
+          transition={isRefreshing ? { repeat: Infinity, duration: 1 } : { type: "spring", damping: 20 }}
+          className="bg-white rounded-full p-2 shadow-xl border border-brass/20 text-brass"
+        >
+          <RefreshCw size={20} className={isRefreshing ? "animate-spin" : ""} />
+        </motion.div>
+      </div>
+
+      {/* Mesh Background Overlay */}
+      <div className="fixed inset-0 pointer-events-none z-0">
+        <motion.div 
+          animate={{
+            background: [
+              `radial-gradient(circle at 20% 20%, ${timeConfig.bg}88 0%, transparent 40%)`,
+              `radial-gradient(circle at 80% 80%, ${timeConfig.bg}88 0%, transparent 40%)`,
+              `radial-gradient(circle at 20% 20%, ${timeConfig.bg}88 0%, transparent 40%)`,
+            ]
+          }}
+          transition={{ duration: 15, repeat: Infinity, ease: "linear" }}
+          className="w-full h-full opacity-40 blur-[100px]"
+        />
+      </div>
+
       {/* Section 1: Time-aware Header */}
       <motion.header
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
         onClick={() => onNavigate('calendar')}
-        style={{ background: timeConfig.bg }}
-        className="w-full pt-20 pb-12 px-8 transition-colors duration-1000 cursor-pointer"
+        className="relative z-10 w-full pt-16 pb-12 px-8 cursor-pointer"
       >
-        <div className="space-y-1">
-          <h1 
-            className="font-serif text-[48px] font-light leading-tight"
-            style={{ color: timeConfig.dark ? "#F8F4EE" : "#1A1A1A" }}
-          >
-            {timeConfig.greeting}
-          </h1>
-          <p 
-            className="font-outfit text-lg"
-            style={{ color: timeConfig.dark ? "#D4CEC4" : "#6B6560" }}
-          >
-            {userData?.displayName?.split(' ')[0] || "there"}
-          </p>
+        <div className="flex justify-between items-start">
+          <div className="space-y-1">
+            <h1 
+              className="font-serif text-[44px] font-light leading-tight tracking-tight"
+              style={{ color: timeConfig.dark ? "#F8F4EE" : "#1A1A1A" }}
+            >
+              {timeConfig.greeting}
+            </h1>
+            <p 
+              className="font-outfit text-lg opacity-60"
+              style={{ color: timeConfig.dark ? "#D4CEC4" : "#6B6560" }}
+            >
+              {userData?.displayName?.split(' ')[0] || "there"}
+            </p>
+          </div>
+          <LivePulse active={isSyncing} />
         </div>
-        <div className="mt-8">
+        
+        <div className="mt-8 flex items-center gap-3">
+          <div className="h-[1px] flex-1 bg-stone/20" />
           <p 
-            className="font-outfit text-[13px] uppercase tracking-[2px] font-medium"
-            style={{ color: timeConfig.dark ? "#B8955A" : "#B8955A" }}
+            className="font-outfit text-[11px] uppercase tracking-[3px] font-bold text-brass"
           >
-            {format(currentTime, "EEEE, d MMMM")}
+            {format(currentTime, "EEEE, d MMM")}
           </p>
+          <div className="h-[1px] flex-1 bg-stone/20" />
         </div>
       </motion.header>
 
-      <div className="space-y-8 mt-8">
+      <div className="relative z-10 space-y-8 mt-2">
         {/* Coming Up Countdown */}
         {specialDates.length > 0 && (
           <Section delay={0.03}>
@@ -711,7 +810,7 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
                   key={date.id}
                   onClick={() => fetchGiftSuggestions(date)}
                   whileTap={{ scale: 0.98 }}
-                  className={`flex-shrink-0 w-[220px] bg-parchment border border-stone rounded-[20px] p-5 snap-start cursor-pointer relative overflow-hidden ${
+                  className={`flex-shrink-0 w-[240px] bg-white/40 backdrop-blur-md border border-white/50 rounded-[28px] p-6 snap-start cursor-pointer relative overflow-hidden shadow-sm ${
                     date.daysUntil <= 1 ? 'border-l-[4px] border-l-rose-urgent' : 
                     date.daysUntil <= 7 ? 'border-l-[4px] border-l-brass' : ''
                   }`}
@@ -780,15 +879,23 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.9, transition: { type: "spring", stiffness: 300, damping: 25 } }}
-                className="bg-parchment border border-stone rounded-[24px] p-6 shadow-sm"
+                className="glass-card border border-white/40 rounded-[28px] p-7 shadow-xl"
+                style={{
+                  background: "rgba(255, 255, 255, 0.45)",
+                  backdropFilter: "blur(16px)",
+                  boxShadow: "0 10px 40px rgba(0,0,0,0.05)"
+                }}
               >
-                <p className="font-outfit text-[13px] text-warm-grey mb-4">How are you feeling today?</p>
-                <div className="flex justify-between items-center">
+                <div className="flex items-center gap-2 mb-4">
+                  <div className="w-1.5 h-1.5 rounded-full bg-brass animate-pulse" />
+                  <p className="font-outfit text-[11px] uppercase tracking-[2px] text-warm-grey font-bold">Daily Check-in</p>
+                </div>
+                <div className="flex justify-between items-center bg-white/30 p-2 rounded-2xl border border-white/40">
                   {MOOD_EMOJIS.map((emoji, i) => (
                     <button
                       key={i}
                       onClick={() => handleMoodCheckIn(i)}
-                      className="w-11 h-11 flex items-center justify-center text-2xl hover:bg-linen rounded-full transition-colors active:scale-90"
+                      className="w-12 h-12 flex items-center justify-center text-2xl hover:bg-white/60 rounded-xl transition-all active:scale-90 hover:scale-110"
                     >
                       {emoji}
                     </button>
@@ -802,19 +909,22 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
                 animate={{ opacity: 1, y: 0 }}
                 className="flex justify-center"
               >
-                <div className="bg-parchment border border-stone rounded-full px-[14px] py-[6px] flex items-center gap-3 shadow-sm">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-lg">{MOOD_EMOJIS[myMood.mood - 1]}</span>
+                <div 
+                  className="bg-white/60 border border-white/80 rounded-full px-5 py-2 flex items-center gap-3 shadow-lg backdrop-blur-md"
+                >
+                  <div className="flex items-center gap-2">
+                    <motion.span layoutId="my-mood-emoji" className="text-xl">{MOOD_EMOJIS[myMood.mood - 1]}</motion.span>
+                    <div className="w-[1px] h-3 bg-stone/30" />
                     {partnerMood ? (
-                      <span className="text-lg">{MOOD_EMOJIS[partnerMood.mood - 1]}</span>
+                      <motion.span layoutId="partner-mood-emoji" className="text-xl">{MOOD_EMOJIS[partnerMood.mood - 1]}</motion.span>
                     ) : (
-                      <div className="w-5 h-5 rounded-full border border-stone border-dashed flex items-center justify-center">
-                        <Heart size={10} className="text-stone" />
+                      <div className="w-6 h-6 rounded-full border border-stone/30 border-dashed flex items-center justify-center">
+                        <Heart size={12} className="text-stone/40 animate-pulse" />
                       </div>
                     )}
                   </div>
-                  <span className="font-outfit text-[12px] text-warm-grey">
-                    {partnerMood ? "Today's vibes" : "Waiting for partner..."}
+                  <span className="font-outfit text-[11px] text-warm-grey font-bold uppercase tracking-wider">
+                    {partnerMood ? "Synchronized" : "Vibe check"}
                   </span>
                 </div>
               </motion.div>
@@ -822,29 +932,37 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
           </AnimatePresence>
         </Section>
 
-        {/* Section 2: Partner Status Card */}
         <Section delay={0.08}>
-          <Card className="p-5 flex items-center justify-between">
+          <Card layoutId="partner-status" className="p-4 flex items-center justify-between group active:scale-[0.99] transition-transform">
             <div className="flex items-center gap-4">
               <div className="relative">
+                <div className="absolute inset-0 bg-brass/20 rounded-full blur-md opacity-0 group-hover:opacity-100 transition-opacity" />
                 <img 
                   src={partnerData?.photoURL || `https://ui-avatars.com/api/?name=${partnerData?.displayName || 'P'}&background=EDE8DF&color=1A1A1A`}
                   alt=""
-                  className="w-12 h-12 rounded-full object-cover border border-stone"
+                  className="relative w-14 h-14 rounded-full object-cover border-2 border-white shadow-md"
                   referrerPolicy="no-referrer"
                 />
-                <div 
-                  className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-parchment ${partnerData?.isOnline ? 'bg-green-500' : 'bg-stone'}`}
+                <motion.div 
+                  animate={partnerData?.isOnline ? { scale: [1, 1.2, 1] } : {}}
+                  transition={{ repeat: Infinity, duration: 2 }}
+                  className={`absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full border-2 border-white ${partnerData?.isOnline ? 'bg-green-500' : 'bg-stone'}`}
                 />
               </div>
               <div>
-                <h2 className="font-serif text-xl text-charcoal">
+                <h2 className="font-serif text-[20px] text-charcoal leading-tight">
                   {partnerData?.displayName || "Partner"}
                 </h2>
-                <p className="font-outfit text-xs text-warm-grey">
-                  {partnerData?.isOnline ? "Online now" : lastSeenText}
-                </p>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <div className={`w-1.5 h-1.5 rounded-full ${partnerData?.isOnline ? 'bg-green-500' : 'bg-stone'}`} />
+                  <p className="font-outfit text-[11px] text-warm-grey uppercase tracking-wider font-bold">
+                    {partnerData?.isOnline ? "Active Now" : lastSeenText}
+                  </p>
+                </div>
               </div>
+            </div>
+            <div className="bg-stone/10 p-2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
+              <ChevronRight size={16} className="text-stone" />
             </div>
           </Card>
         </Section>
@@ -892,43 +1010,76 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
           </Section>
         )}
 
-        {/* Section 3: Bento Summary Grid */}
+        {/* Section 3: Shared Dashboard Bento */}
         <Section delay={0.16}>
-          <div className="grid grid-cols-12 gap-4 h-[200px]">
-            {/* Large card left: Next Event */}
+          <div className="grid grid-cols-12 gap-5 h-[240px]">
+            {/* Main Tile: Next Event */}
             <Card 
+              layoutId="next-event-card"
               onClick={() => onNavigate('calendar')}
-              className="col-span-7 p-5 flex flex-col justify-between cursor-pointer hover:bg-[#EDE8DF] transition-colors"
+              className="col-span-12 xs:col-span-7 p-6 flex flex-col justify-between group active:scale-[0.97] transition-all"
             >
-              <p className="font-outfit text-[11px] uppercase tracking-wider text-warm-grey">Next Event</p>
-              {nextEvent ? (
-                <div className="space-y-1">
-                  <h3 className="font-serif text-lg text-charcoal line-clamp-2">{nextEvent.title}</h3>
-                  <p className="font-outfit text-[13px] text-brass">
-                    {ensureDate(nextEvent.date) ? format(ensureDate(nextEvent.date)!, "h:mm a") : ""}
-                  </p>
+              <div className="flex justify-between items-start">
+                <div className="bg-brass/10 p-2 rounded-xl">
+                  <Calendar size={20} className="text-brass group-hover:scale-110 transition-transform" />
                 </div>
-              ) : (
-                <EmptyState text="Nothing yet" />
-              )}
+                <Sparkles size={16} className="text-brass/40 opacity-0 group-hover:opacity-100 transition-opacity" />
+              </div>
+              
+              <div>
+                <p className="font-outfit text-[10px] uppercase tracking-[2px] text-warm-grey mb-1 font-bold">Coming Up</p>
+                {nextEvent ? (
+                  <div className="space-y-1">
+                    <h3 className="font-serif text-[22px] text-charcoal leading-tight line-clamp-2">{nextEvent.title}</h3>
+                    <p className="font-outfit text-[14px] text-brass font-medium">
+                      {ensureDate(nextEvent.date) ? format(ensureDate(nextEvent.date)!, "EEE, d MMM • h:mm a") : ""}
+                    </p>
+                  </div>
+                ) : (
+                  <EmptyState text="No upcoming events" />
+                )}
+              </div>
             </Card>
 
-            <div className="col-span-5 flex flex-col gap-4">
-              {/* Small card top right: Groceries */}
+            <div className="col-span-12 xs:col-span-5 grid grid-cols-2 xs:grid-cols-1 gap-5">
+              {/* Mini Tile: Groceries */}
               <Card 
+                layoutId="grocery-mini-tile"
                 onClick={() => onNavigate('grocery')}
-                className="flex-1 p-4 flex flex-col justify-center items-center text-center cursor-pointer hover:bg-[#EDE8DF] transition-colors"
+                className="p-4 flex flex-col justify-center items-center text-center group"
               >
-                <span className="font-serif text-3xl text-charcoal">{groceryCount}</span>
-                <span className="font-outfit text-[12px] text-warm-grey">items left</span>
+                <div className="relative">
+                  <motion.span 
+                    key={groceryCount}
+                    initial={{ y: 10, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    className="block font-serif text-[32px] text-charcoal leading-none"
+                  >
+                    {groceryCount}
+                  </motion.span>
+                  <ShoppingCart size={14} className="absolute -right-4 top-0 text-stone opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
+                <span className="font-outfit text-[11px] text-warm-grey uppercase tracking-wider font-bold mt-1">Groceries</span>
               </Card>
-              {/* Small card bottom right: Spend */}
+
+              {/* Mini Tile: Spend */}
               <Card 
+                layoutId="finance-mini-tile"
                 onClick={() => onNavigate('finances')}
-                className="flex-1 p-4 flex flex-col justify-center items-center text-center cursor-pointer hover:bg-[#EDE8DF] transition-colors"
+                className="p-4 flex flex-col justify-center items-center text-center group"
               >
-                <span className="font-serif text-2xl text-charcoal">${monthlySpend}</span>
-                <span className="font-outfit text-[12px] text-warm-grey">this month</span>
+                <div className="relative">
+                   <motion.span 
+                    key={monthlySpend}
+                    initial={{ scale: 0.8, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    className="block font-serif text-[24px] text-charcoal leading-none"
+                  >
+                    ${monthlySpend}
+                  </motion.span>
+                  <DollarSign size={14} className="absolute -right-4 top-0 text-stone opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
+                <span className="font-outfit text-[11px] text-warm-grey uppercase tracking-wider font-bold mt-1">This Month</span>
               </Card>
             </div>
           </div>
@@ -936,26 +1087,30 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
 
         {/* Section 4: Last Memory */}
         <Section delay={0.24}>
-          <Card onClick={() => onNavigate('together')} className="group cursor-pointer">
-            <div className="aspect-[16/6] w-full relative bg-stone overflow-hidden">
+          <Card layoutId="last-memory" onClick={() => onNavigate('together')} className="group cursor-pointer p-0 border-white/40">
+            <div className="aspect-[16/7] w-full relative bg-stone/10 overflow-hidden">
               {lastMemory ? (
-                <img 
-                  src={lastMemory.imageUrl} 
-                  alt="" 
-                  className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
-                  referrerPolicy="no-referrer"
-                />
+                <>
+                  <img 
+                    src={lastMemory.imageUrl} 
+                    alt="" 
+                    className="w-full h-full object-cover transition-transform duration-1000 group-hover:scale-110"
+                    referrerPolicy="no-referrer"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-charcoal/60 via-transparent to-transparent opacity-60 group-hover:opacity-80 transition-opacity" />
+                </>
               ) : (
-                <div className="w-full h-full flex items-center justify-center bg-stone/20">
+                <div className="w-full h-full flex items-center justify-center">
                   <EmptyState text="Add your first memory together" />
                 </div>
               )}
             </div>
             {lastMemory && (
-              <div className="p-4">
-                <p className="font-outfit text-sm text-warm-grey line-clamp-1 italic">
+              <div className="p-5 flex items-center justify-between">
+                <p className="font-outfit text-[13px] text-warm-grey line-clamp-1 italic pr-4">
                   "{lastMemory.caption}"
                 </p>
+                <Sparkles size={14} className="text-brass/40" />
               </div>
             )}
           </Card>
@@ -963,22 +1118,25 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
 
         {/* Section 5: Partner's Last Note */}
         <Section delay={0.32}>
-          <Card className="p-8 relative min-h-[160px] flex flex-col justify-center">
-            <span className="absolute top-4 left-4 font-serif text-[80px] text-brass-light leading-none select-none opacity-50">
+          <Card layoutId="last-note" className="p-8 relative min-h-[160px] flex flex-col justify-center border-white/40">
+            <span className="absolute top-4 left-6 font-serif text-[100px] text-brass/10 leading-none select-none italic">
               “
             </span>
             <div className="relative z-10 space-y-4">
               {lastNote ? (
                 <>
-                  <p className="font-serif italic text-lg text-charcoal leading-relaxed">
+                  <p className="font-serif italic text-[20px] text-charcoal leading-relaxed tracking-tight">
                     {lastNote.text}
                   </p>
-                  <p className="font-outfit text-[13px] text-brass">
-                    — {lastNote.authorName || partnerData?.displayName || "Partner"}
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <div className="h-[1px] w-6 bg-brass/30" />
+                    <p className="font-outfit text-[11px] text-brass uppercase tracking-widest font-bold">
+                      {lastNote.authorName || partnerData?.displayName || "Partner"}
+                    </p>
+                  </div>
                 </>
               ) : (
-                <EmptyState text="Nothing yet — send something" />
+                <EmptyState text="Nothing shared yet — surprise them with a note" />
               )}
             </div>
           </Card>
@@ -986,142 +1144,149 @@ export default function DashboardHome({ onNavigate }: DashboardHomeProps) {
 
         {/* Section 6: Relationship Insights */}
         <Section delay={0.4} className="pb-12">
-          <div className="mb-4">
-            <p className="font-outfit text-[11px] tracking-[2px] uppercase text-brass font-medium">
-              Relationship Insights
-            </p>
-          </div>
+            <div className="mb-4 flex items-center justify-between">
+              <p className="font-outfit text-[11px] tracking-[2px] uppercase text-brass font-bold">
+                Daily Insights
+              </p>
+              <div className="h-[1px] flex-1 bg-stone/10 ml-4" />
+            </div>
 
-          <AnimatePresence mode="wait">
-            {loadingInsights ? (
-              <motion.div 
-                key="loading"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="space-y-4"
-              >
-                {[1, 2].map(i => (
-                  <div key={i} className="bg-[#EDE8DF] border border-[#D4CEC4] rounded-[20px] p-5 animate-pulse">
-                    <div className="flex gap-4">
-                      <div className="w-10 h-10 bg-[#D4CEC4] rounded-full" />
-                      <div className="flex-1 space-y-2">
-                        <div className="h-4 bg-[#D4CEC4] rounded w-1/3" />
-                        <div className="h-3 bg-[#D4CEC4] rounded w-full" />
-                        <div className="h-3 bg-[#D4CEC4] rounded w-2/3" />
+            <AnimatePresence mode="wait">
+              {loadingInsights ? (
+                <motion.div 
+                  key="loading"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="space-y-4"
+                >
+                  {[1, 2].map(i => (
+                    <div key={i} className="bg-white/30 border border-white/40 rounded-[24px] p-6 animate-pulse">
+                      <div className="flex gap-4">
+                        <div className="w-12 h-12 bg-stone/10 rounded-2xl" />
+                        <div className="flex-1 space-y-3">
+                          <div className="h-4 bg-stone/10 rounded w-1/3" />
+                          <div className="h-3 bg-stone/10 rounded w-full" />
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
-              </motion.div>
-            ) : insights && insights.length > 0 ? (
-              <motion.div 
-                key="insights"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="space-y-4"
-              >
-                {insights.map((insight, i) => (
-                  <div 
-                    key={i} 
-                    className="bg-[#EDE8DF] border border-[#D4CEC4] rounded-[20px] p-5 shadow-sm"
-                  >
-                    <div className="flex items-start gap-4">
-                      <span className="text-2xl flex-shrink-0">{insight.emoji}</span>
-                      <div className="space-y-1.5">
-                        <h3 className="font-serif text-[17px] text-[#1A1A1A] leading-tight font-bold">
-                          {insight.title}
-                        </h3>
-                        <p className="font-outfit text-[13px] text-[#6B6560] leading-[1.5]">
-                          {insight.body}
-                        </p>
-                        {insight.action && (
-                          <p className="font-outfit text-[12px] text-brass italic mt-2">
-                            {insight.action}
+                  ))}
+                </motion.div>
+              ) : insights && insights.length > 0 ? (
+                <motion.div 
+                  key="insights"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="space-y-4"
+                >
+                  {insights.map((insight, i) => (
+                    <motion.div 
+                      key={i} 
+                      whileHover={{ y: -4, backgroundColor: "rgba(255, 255, 255, 0.5)" }}
+                      className="bg-white/40 border border-white/50 rounded-[24px] p-6 shadow-sm backdrop-blur-sm transition-colors"
+                    >
+                      <div className="flex items-start gap-4">
+                        <div className="w-12 h-12 flex items-center justify-center bg-white/60 rounded-2xl shadow-inner text-2xl flex-shrink-0">
+                          {insight.emoji}
+                        </div>
+                        <div className="space-y-1.5 flex-1 pt-1">
+                          <h3 className="font-serif text-[18px] text-[#1A1A1A] leading-tight font-bold">
+                            {insight.title}
+                          </h3>
+                          <p className="font-outfit text-[13px] text-[#6B6560] leading-[1.6]">
+                            {insight.body}
                           </p>
-                        )}
+                          {insight.action && (
+                            <div className="inline-flex items-center gap-2 mt-4 text-brass group cursor-pointer hover:text-charcoal transition-colors">
+                              <p className="font-outfit text-[11px] uppercase tracking-wider font-bold italic">
+                                {insight.action}
+                              </p>
+                              <ChevronRight size={12} className="group-hover:translate-x-1 transition-transform" />
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  </div>
-                ))}
-              </motion.div>
-            ) : (
-              <motion.div 
-                key="empty"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="text-center py-8"
-              >
-                <p className="font-outfit text-sm text-[#6B6560] italic">
-                  Use the app for a few days and we'll surface insights about your life together
-                </p>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </Section>
+                    </motion.div>
+                  ))}
+                </motion.div>
+              ) : (
+                <motion.div 
+                  key="empty"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="text-center py-10 bg-stone/5 rounded-[24px] border border-dashed border-stone/20"
+                >
+                  <p className="font-outfit text-[13px] text-[#6B6560] italic">
+                    Building insights based on your shared activity...
+                  </p>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </Section>
 
-        {/* Section 7: Weekly Summary */}
-        {(weeklySummary || loadingSummary) && isSunday(new Date()) && (
-          <Section delay={0.48} className="pb-12">
-            <Card className="p-6 relative overflow-hidden bg-[#EDE8DF] border-[#D4CEC4] rounded-[24px]">
-              <button 
-                onClick={handleDismissSummary}
-                className="absolute top-4 right-4 p-2 text-warm-grey hover:text-charcoal transition-colors z-10"
-              >
-                <X size={18} />
-              </button>
+          {/* Section 7: Weekly Summary */}
+          {(weeklySummary || loadingSummary) && isSunday(new Date()) && (
+            <Section delay={0.48} className="pb-12">
+              <Card className="p-7 relative overflow-hidden bg-gradient-to-br from-brass/5 to-parchment/30 border-white/60 rounded-[32px]">
+                <div className="absolute -top-10 -right-10 w-40 h-40 bg-brass/5 rounded-full blur-[60px]" />
+                
+                <button 
+                  onClick={handleDismissSummary}
+                  className="absolute top-5 right-5 p-2 text-warm-grey/60 hover:text-charcoal transition-colors z-10 hover:bg-white/40 rounded-full"
+                >
+                  <X size={16} />
+                </button>
 
-              <div className="flex items-center justify-between mb-6">
-                <p className="font-outfit text-[11px] tracking-[2px] uppercase text-brass font-medium">
-                  This Week
-                </p>
-                <p className="font-outfit text-[11px] text-warm-grey">
-                  {weeklySummary ? `${format(weeklySummary.weekStart.toDate(), "MMM d")} - ${format(weeklySummary.weekEnd.toDate(), "MMM d")}` : "..."}
-                </p>
-              </div>
-
-              {loadingSummary ? (
-                <div className="space-y-6">
-                  <div className="flex gap-3 overflow-x-auto no-scrollbar">
-                    {[1, 2, 3].map(i => (
-                      <div key={i} className="h-8 w-24 bg-white/50 rounded-full animate-pulse flex-shrink-0" />
-                    ))}
-                  </div>
-                  <div className="space-y-2">
-                    <div className="h-4 bg-charcoal/5 rounded w-full animate-pulse" />
-                    <div className="h-4 bg-charcoal/5 rounded w-5/6 animate-pulse" />
-                    <div className="h-4 bg-charcoal/5 rounded w-4/6 animate-pulse" />
+                <div className="flex items-center justify-between mb-8">
+                  <div>
+                    <p className="font-outfit text-[10px] tracking-[3px] uppercase text-brass font-black mb-1">Weekly Digest</p>
+                    <p className="font-serif text-[18px] text-charcoal italic">
+                      {weeklySummary ? `${format(weeklySummary.weekStart.toDate(), "MMM d")} — ${format(weeklySummary.weekEnd.toDate(), "MMM d")}` : "..."}
+                    </p>
                   </div>
                 </div>
-              ) : (
-                <>
-                  <div className="flex gap-3 overflow-x-auto pb-2 no-scrollbar snap-x">
-                    <div className="bg-white px-4 py-1.5 rounded-full flex items-center gap-2 flex-shrink-0 snap-start shadow-sm">
-                      <span className="text-sm">💰</span>
-                      <span className="font-outfit text-[13px] text-charcoal font-medium">${weeklySummary?.stats.spent.toFixed(0)}</span>
+
+                {loadingSummary ? (
+                  <div className="space-y-6">
+                    <div className="flex gap-3">
+                      {[1, 2, 3].map(i => (
+                        <div key={i} className="h-9 w-24 bg-white/40 rounded-full animate-pulse flex-shrink-0" />
+                      ))}
                     </div>
-                    <div className="bg-white px-4 py-1.5 rounded-full flex items-center gap-2 flex-shrink-0 snap-start shadow-sm">
-                      <span className="text-sm">✅</span>
-                      <span className="font-outfit text-[13px] text-charcoal font-medium">
-                        {Object.values(weeklySummary?.stats.choresCompleted || {}).reduce((a, b) => a + b, 0)} chores
-                      </span>
-                    </div>
-                    <div className="bg-white px-4 py-1.5 rounded-full flex items-center gap-2 flex-shrink-0 snap-start shadow-sm">
-                      <span className="text-sm">📸</span>
-                      <span className="font-outfit text-[13px] text-charcoal font-medium">{weeklySummary?.stats.memoriesCount} memories</span>
-                    </div>
-                    <div className="bg-white px-4 py-1.5 rounded-full flex items-center gap-2 flex-shrink-0 snap-start shadow-sm">
-                      <span className="text-sm">🛒</span>
-                      <span className="font-outfit text-[13px] text-charcoal font-medium">{weeklySummary?.stats.groceriesCompleted} items</span>
+                    <div className="space-y-3">
+                      <div className="h-4 bg-charcoal/5 rounded-full w-full animate-pulse" />
+                      <div className="h-4 bg-charcoal/5 rounded-full w-4/6 animate-pulse" />
                     </div>
                   </div>
+                ) : (
+                  <>
+                    <div className="flex gap-3 overflow-x-auto pb-4 no-scrollbar snap-x">
+                      {[
+                        { icon: "💰", val: `$${weeklySummary?.stats.spent.toFixed(0)}`, label: "Spent" },
+                        { icon: "✅", val: Object.values(weeklySummary?.stats.choresCompleted || {}).reduce((a, b) => a + b, 0), label: "Chores" },
+                        { icon: "📸", val: weeklySummary?.stats.memoriesCount, label: "Memories" },
+                        { icon: "🛒", val: weeklySummary?.stats.groceriesCompleted, label: "Items" }
+                      ].map((stat, i) => (
+                        <motion.div 
+                          key={i}
+                          initial={{ opacity: 0, scale: 0.8 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          transition={{ delay: 0.5 + (i * 0.1) }}
+                          className="bg-white/60 px-5 py-2.5 rounded-2xl flex flex-col items-center gap-0.5 flex-shrink-0 snap-start shadow-sm border border-white/80"
+                        >
+                          <span className="text-xl mb-1">{stat.icon}</span>
+                          <span className="font-serif text-[16px] text-charcoal font-bold">{stat.val}</span>
+                          <span className="font-outfit text-[9px] uppercase tracking-tighter text-warm-grey font-bold">{stat.label}</span>
+                        </motion.div>
+                      ))}
+                    </div>
 
-                  <p className="font-serif italic text-[16px] text-charcoal leading-relaxed mt-6">
-                    {weeklySummary?.narrative || "Start using OurSpace this week and we'll write your first weekly story on Sunday"}
-                  </p>
-                </>
-              )}
-            </Card>
+                    <p className="font-serif italic text-[18px] text-charcoal/90 leading-relaxed mt-4 bg-white/30 p-5 rounded-2xl border border-white/30">
+                      {weeklySummary?.narrative || "Start using OurSpace this week and we'll write your first weekly story on Sunday"}
+                    </p>
+                  </>
+                )}
+              </Card>
           </Section>
         )}
       </div>

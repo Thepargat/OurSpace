@@ -17,7 +17,7 @@ import {
   LogOut,
   Check
 } from 'lucide-react';
-import { doc, updateDoc, onSnapshot, collection, query, where, getDocs, addDoc, limit, Timestamp } from 'firebase/firestore';
+import { doc, updateDoc, onSnapshot, collection, query, where, getDocs, addDoc, setDoc, limit, Timestamp, deleteDoc } from 'firebase/firestore';
 import { format } from 'date-fns';
 import { db, auth } from '../../firebase';
 import { useAuth } from '../AuthWrapper';
@@ -127,6 +127,9 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
   const [showBudgetSheet, setShowBudgetSheet] = useState(false);
   const [showSignOutSheet, setShowSignOutSheet] = useState(false);
   const [budgetLimit, setBudgetLimit] = useState("");
+  const [partnerEmail, setPartnerEmail] = useState("");
+  const [isSendingInvite, setIsSendingInvite] = useState(false);
+  const [inviteSent, setInviteSent] = useState(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
 
   // Listen to household and partner
@@ -171,17 +174,27 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
       const q = query(
         collection(db, 'inviteCodes'),
         where('createdBy', '==', user.uid),
-        where('used', '==', false),
-        limit(1)
+        where('used', '==', false)
       );
       const snapshot = await getDocs(q);
       
-      if (!snapshot.empty) {
-        setInviteCode(snapshot.docs[0].data().code);
+      let validCode = null;
+      for (const d of snapshot.docs) {
+        const c = d.data().code;
+        if (/^\d{6}$/.test(c)) {
+          validCode = c;
+        } else {
+          // Delete old alphanumeric legacy codes
+          await deleteDoc(doc(db, 'inviteCodes', c));
+        }
+      }
+
+      if (validCode) {
+        setInviteCode(validCode);
       } else {
-        // Generate new 6-digit code
-        const newCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-        await addDoc(collection(db, 'inviteCodes'), {
+        // Generate new 6-digit number code
+        const newCode = Math.floor(100000 + Math.random() * 900000).toString();
+        await setDoc(doc(db, 'inviteCodes', newCode), {
           code: newCode,
           createdBy: user.uid,
           householdId: householdId,
@@ -240,6 +253,27 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
     if (!inviteCode) return;
     const message = `Hey! Join me on OurSpace 🏠 Use code: ${inviteCode} to link up with me. Download at: ${window.location.origin}`;
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
+  };
+
+  const sendEmailInvite = async () => {
+    if (!user || !partnerEmail || !householdId) return;
+    setIsSendingInvite(true);
+    try {
+      await addDoc(collection(db, 'emailInvites'), {
+        email: partnerEmail.toLowerCase().trim(),
+        fromUid: user.uid,
+        fromName: userData?.displayName || user.displayName || 'Your Partner',
+        householdId: householdId,
+        createdAt: Timestamp.now()
+      });
+      setInviteSent(true);
+      setPartnerEmail("");
+      setTimeout(() => setInviteSent(false), 3000);
+    } catch (error) {
+      console.error('Failed to send invite:', error);
+    } finally {
+      setIsSendingInvite(false);
+    }
   };
 
   const handleSignOut = () => {
@@ -399,6 +433,25 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
                   >
                     Share via WhatsApp
                   </button>
+                </div>
+
+                <div className="mb-6 relative">
+                  <div className="flex items-center gap-2">
+                    <input 
+                      type="email"
+                      value={partnerEmail}
+                      onChange={(e) => setPartnerEmail(e.target.value)}
+                      placeholder="Or invite by email address..."
+                      className="flex-1 h-11 rounded-xl border border-[#D4CEC4] bg-white font-outfit text-[14px] text-[#1A1A1A] px-4 outline-none focus:border-[#B8955A]"
+                    />
+                    <button
+                      onClick={sendEmailInvite}
+                      disabled={!partnerEmail || isSendingInvite}
+                      className="h-11 px-4 rounded-xl bg-[#1A1A1A] font-outfit text-[14px] text-white flex items-center justify-center disabled:opacity-50"
+                    >
+                      {isSendingInvite ? '...' : inviteSent ? 'Sent!' : 'Send'}
+                    </button>
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-center gap-2">

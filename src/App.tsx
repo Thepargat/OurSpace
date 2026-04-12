@@ -3,7 +3,7 @@ import Lenis from 'lenis';
 import { AnimatePresence, motion } from "motion/react";
 import { useDrag } from "@use-gesture/react";
 import { X } from "lucide-react";
-import { doc, setDoc, onSnapshot, getDocs, updateDoc, collection, query, where, Timestamp } from "firebase/firestore";
+import { doc, setDoc, onSnapshot, getDocs, updateDoc, collection, query, where, Timestamp, arrayRemove, arrayUnion, deleteDoc } from "firebase/firestore";
 import { db, auth } from "./firebase";
 import AuthWrapper, { useAuth } from "./components/AuthWrapper";
 import { requestNotificationPermission, onForegroundMessage, notifyPartner, updateFCMToken } from "./services/notificationService";
@@ -34,6 +34,9 @@ import ChoresTab from "./components/tabs/ChoresTab";
 import SettingsTab from "./components/tabs/SettingsTab";
 import MoodHistoryTab from "./components/tabs/MoodHistoryTab";
 import SubScreen from "./components/ui/SubScreen";
+import SubscriptionsScreen from "./components/screens/SubscriptionsScreen";
+import HomeCarScreen from "./components/screens/HomeCarScreen";
+import ActivityFeedScreen from "./components/screens/ActivityFeedScreen";
 import OnboardingStep1 from "./components/onboarding/OnboardingStep1";
 import OnboardingStep2 from "./components/onboarding/OnboardingStep2";
 import OnboardingStep3 from "./components/onboarding/OnboardingStep3";
@@ -52,6 +55,8 @@ function MainApp() {
   const [toastMsg, setToastMsg] = useState("");
   const [toastType, setToastType] = useState<'online' | 'offline'>('offline');
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [pendingInvite, setPendingInvite] = useState<any>(null);
+  const [isAcceptingInvite, setIsAcceptingInvite] = useState(false);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [isFirstLoadOffline, setIsFirstLoadOffline] = useState(!navigator.onLine && !localStorage.getItem('ourspace_cached'));
   const [showNotificationCard, setShowNotificationCard] = useState(false);
@@ -172,6 +177,52 @@ function MainApp() {
       }
     });
   }, []);
+
+  // --- Email Invites Listener ---
+  useEffect(() => {
+    if (!user?.email) return;
+    const q = query(collection(db, 'emailInvites'), where('email', '==', user.email.toLowerCase()));
+    const unsub = onSnapshot(q, (snapshot) => {
+      if (!snapshot.empty) {
+        setPendingInvite({ id: snapshot.docs[0].id, ...snapshot.docs[0].data() });
+      } else {
+        setPendingInvite(null);
+      }
+    });
+    return unsub;
+  }, [user]);
+
+  const handleAcceptInvite = async () => {
+    if (!user || !pendingInvite) return;
+    setIsAcceptingInvite(true);
+    try {
+      if (householdId) {
+        // Leave old household
+        await updateDoc(doc(db, "households", householdId), {
+          memberIds: arrayRemove(user.uid)
+        });
+      }
+      
+      // Join new household
+      await updateDoc(doc(db, "households", pendingInvite.householdId), {
+        memberIds: arrayUnion(user.uid)
+      });
+      
+      // Link Profile
+      await updateDoc(doc(db, "users", user.uid), {
+        householdId: pendingInvite.householdId,
+        partnerId: pendingInvite.fromUid
+      });
+      
+      // Delete invite
+      await deleteDoc(doc(db, "emailInvites", pendingInvite.id));
+      setPendingInvite(null);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsAcceptingInvite(false);
+    }
+  };
 
   // Event Reminder Checker
   useEffect(() => {
@@ -352,6 +403,9 @@ function MainApp() {
         case 'savings': return <SubScreen key="savings" title="Savings Goals" onBack={() => setSubScreen(null)} />;
         case 'mood-history': return <MoodHistoryTab key="mood-history" onBack={() => setSubScreen(null)} />;
         case 'settings': return <SettingsTab key="settings" onBack={() => setSubScreen(null)} />;
+        case 'subscriptions': return <SubscriptionsScreen key="subscriptions" onBack={() => setSubScreen(null)} />;
+        case 'home-car': return <HomeCarScreen key="home-car" onBack={() => setSubScreen(null)} />;
+        case 'activity': return <ActivityFeedScreen key="activity" onBack={() => setSubScreen(null)} />;
         default: return null;
       }
     }
@@ -574,6 +628,52 @@ function MainApp() {
         message={toastMsg} 
         type={toastType} 
       />
+
+      <AnimatePresence>
+        {pendingInvite && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{
+              position: 'fixed', inset: 0, background: 'rgba(26,26,26,0.8)',
+              backdropFilter: 'blur(8px)', zIndex: 9999,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px'
+            }}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-[#F8F4EE] rounded-[24px] p-8 w-full max-w-sm border border-[#D4CEC4]"
+            >
+              <h1 className="font-serif text-[28px] text-[#1A1A1A] mb-2 text-center">New Invite!</h1>
+              <p className="font-outfit text-[#6B6560] text-center mb-8">
+                <strong>{pendingInvite.fromName}</strong> has invited you to join their household.
+                {householdId ? " Accepting this will disconnect you from your current household." : ""}
+              </p>
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={handleAcceptInvite}
+                  disabled={isAcceptingInvite}
+                  className="w-full h-14 bg-[#1A1A1A] text-white rounded-full font-outfit text-[16px] font-medium"
+                >
+                  {isAcceptingInvite ? "Accepting..." : "Accept & Join"}
+                </button>
+                <button
+                  onClick={async () => {
+                    await deleteDoc(doc(db, "emailInvites", pendingInvite.id));
+                    setPendingInvite(null);
+                  }}
+                  className="w-full h-14 bg-transparent text-[#1A1A1A] rounded-full font-outfit text-[16px]"
+                >
+                  Decline
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </>
   );
 }
