@@ -358,7 +358,10 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
   const [partnerData, setPartnerData] = useState<any>(null);
   const [partnerId, setPartnerId] = useState<string | null>(null);
   const [lastMemory, setLastMemory] = useState<any>(null);
+  const [firstMemory, setFirstMemory] = useState<any>(null);
   const [milestones, setMilestones] = useState({ met: 0, married: 0 });
+  const [streak, setStreak] = useState(0);
+  const [daysToAnniversary, setDaysToAnniversary] = useState<number | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [insights, setInsights] = useState<Insight[] | null>(null);
   const [pulseData, setPulseData] = useState({
@@ -412,6 +415,11 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
         toDate(hData?.anniversaryDate);
       if (marriageDate) {
         setMilestones((m) => ({ ...m, married: Math.max(0, differenceInDays(new Date(), marriageDate)) }));
+        // Days to next anniversary
+        const today = new Date();
+        const next = new Date(today.getFullYear(), marriageDate.getMonth(), marriageDate.getDate());
+        if (next < today) next.setFullYear(today.getFullYear() + 1);
+        setDaysToAnniversary(differenceInDays(next, today));
       }
 
       if (pId) {
@@ -451,6 +459,41 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
       (snap) => { if (snap.docs[0]) setLastMemory(snap.docs[0].data()); }
     );
 
+    // First memory ever — for anniversary card
+    const unsubFirstMemory = onSnapshot(
+      query(collection(db, "households", householdId, "memories"), orderBy("date", "asc"), limit(1)),
+      (snap) => { if (snap.docs[0]) setFirstMemory(snap.docs[0].data()); }
+    );
+
+    // Relationship streak — consecutive days either user was active in app
+    // We use completed chores + completed groceries as activity signals (pure DB)
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const unsubStreakChores = onSnapshot(
+      query(
+        collection(db, "households", householdId, "chores"),
+        where("completed", "==", true),
+        orderBy("completedAt", "desc")
+      ),
+      (choreSnap) => {
+        const activeDays = new Set<string>();
+        choreSnap.docs.forEach(d => {
+          const raw = d.data().completedAt;
+          const dt = raw?.toDate ? raw.toDate() : raw ? new Date(raw) : null;
+          if (dt && dt >= thirtyDaysAgo) activeDays.add(dt.toISOString().slice(0, 10));
+        });
+        // Calculate consecutive streak back from today
+        let count = 0;
+        const today = new Date();
+        for (let i = 0; i < 30; i++) {
+          const d = new Date(today);
+          d.setDate(today.getDate() - i);
+          if (activeDays.has(d.toISOString().slice(0, 10))) count++;
+          else if (i > 0) break;
+        }
+        setStreak(count);
+      }
+    );
+
     const unsubChores = onSnapshot(
       query(collection(db, "households", householdId, "chores"), where("completed", "==", false)),
       (snap) => setPulseData((p) => ({ ...p, chores: { count: snap.size } }))
@@ -487,7 +530,7 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
       (snap) => setPulseData((p) => ({ ...p, event: { title: snap.docs[0]?.data()?.title || "Nothing planned" } }))
     );
 
-    return () => { unsubHousehold(); unsubMemory(); unsubChores(); unsubGoals(); unsubGrocery(); unsubEvent(); };
+    return () => { unsubHousehold(); unsubMemory(); unsubFirstMemory(); unsubChores(); unsubGoals(); unsubGrocery(); unsubEvent(); unsubStreakChores(); };
   }, [householdId, user?.uid, userData]);
 
   // ── Proactive Brain ───────────────────────────────────────────────────────
@@ -741,6 +784,94 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
             </motion.div>
           ))}
         </motion.section>
+
+        {/* ── Relationship Streak ──────────────────────────────────────── */}
+        {streak > 0 && (
+          <motion.section
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.38, type: "spring", stiffness: 260, damping: 22 }}
+            className="bg-white rounded-3xl px-5 py-4 border border-black/[0.04] flex items-center gap-4"
+            style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.05)" }}
+          >
+            <div className="relative flex-shrink-0">
+              <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-[28px]"
+                style={{ background: streak >= 7 ? '#FFF3CD' : '#FFF8EE' }}>
+                🔥
+              </div>
+              {streak >= 7 && (
+                <motion.div
+                  className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-[#FF6B00] flex items-center justify-center"
+                  animate={{ scale: [1, 1.2, 1] }}
+                  transition={{ duration: 2, repeat: Infinity }}
+                >
+                  <span className="text-white text-[9px] font-bold">✓</span>
+                </motion.div>
+              )}
+            </div>
+            <div className="flex-1">
+              <p className="font-serif text-[22px] text-[#1A1A1A] leading-none">
+                {streak} day{streak !== 1 ? 's' : ''}
+              </p>
+              <p className="font-outfit text-[12px] text-[#6B6560] mt-0.5">
+                {streak >= 14 ? 'Incredible streak — you\'re unstoppable 🏆' :
+                 streak >= 7  ? 'Amazing week together! Keep it going' :
+                 streak >= 3  ? 'Great momentum — don\'t break the chain' :
+                                'Activity streak — keep it going'}
+              </p>
+            </div>
+            <div className="flex-shrink-0 text-right">
+              <p className="font-outfit text-[9px] uppercase tracking-wider text-[#B8955A]">Streak</p>
+              <div className="flex gap-0.5 mt-1">
+                {Array.from({ length: Math.min(streak, 7) }).map((_, i) => (
+                  <div key={i} className="w-2 h-2 rounded-full bg-[#FF6B00] opacity-80" />
+                ))}
+              </div>
+            </div>
+          </motion.section>
+        )}
+
+        {/* ── Anniversary Countdown ─────────────────────────────────────── */}
+        {daysToAnniversary !== null && (
+          <motion.button
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.42, type: "spring", stiffness: 260, damping: 22 }}
+            onClick={() => onNavigate("together")}
+            className="w-full bg-white rounded-3xl overflow-hidden border border-black/[0.04] text-left"
+            style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.05)" }}
+          >
+            {firstMemory?.imageURL && (
+              <div className="relative h-28 overflow-hidden">
+                <img src={firstMemory.imageURL} alt="First memory" className="w-full h-full object-cover" />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
+                <p className="absolute bottom-2 left-4 font-serif italic text-white text-[11px] opacity-80">
+                  {firstMemory.caption || 'Our first memory together'}
+                </p>
+              </div>
+            )}
+            <div className="px-5 py-4 flex items-center justify-between">
+              <div>
+                <p className="font-outfit text-[9px] uppercase tracking-[0.18em] mb-1" style={{ color: `${GOLD}80` }}>
+                  Anniversary
+                </p>
+                <p className="font-serif text-[20px] text-[#1A1A1A] leading-tight">
+                  {daysToAnniversary === 0
+                    ? '🎉 Happy Anniversary!'
+                    : `${daysToAnniversary} day${daysToAnniversary !== 1 ? 's' : ''} away`}
+                </p>
+                {firstMemory && (
+                  <p className="font-outfit text-[11px] text-[#6B6560] mt-0.5">
+                    First memory: {firstMemory.date
+                      ? format(firstMemory.date?.toDate ? firstMemory.date.toDate() : new Date(firstMemory.date), 'd MMM yyyy')
+                      : '—'}
+                  </p>
+                )}
+              </div>
+              <span className="text-[32px]">💍</span>
+            </div>
+          </motion.button>
+        )}
 
         {/* ── Daily Pulse Grid ─────────────────────────────────────────── */}
         <motion.section variants={stagger} initial="hidden" animate="show" className="grid grid-cols-2 gap-3">

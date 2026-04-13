@@ -192,6 +192,153 @@ export const detectIncomeType = (description: string): 'salary' | 'refund' | 'tr
 };
 
 // ============================================================
+// SPEND VELOCITY — daily rate → month-end projection
+// ============================================================
+export interface SpendVelocity {
+  dailyRate: number;          // average spend per day so far this month
+  projectedMonthEnd: number;  // extrapolated to end of month
+  overspendAmount: number;    // positive = will bust budget, negative = safe
+  daysLeft: number;
+  isOnTrack: boolean;
+}
+
+export const calculateSpendVelocity = (
+  spent: number,
+  budget: number,
+  dayOfMonth: number,
+  daysInMonth: number
+): SpendVelocity => {
+  const safeDay = Math.max(dayOfMonth, 1);
+  const dailyRate = spent / safeDay;
+  const daysLeft = daysInMonth - dayOfMonth;
+  const projectedMonthEnd = spent + dailyRate * daysLeft;
+  const overspendAmount = projectedMonthEnd - budget;
+  return {
+    dailyRate,
+    projectedMonthEnd,
+    overspendAmount,
+    daysLeft,
+    isOnTrack: overspendAmount <= 0,
+  };
+};
+
+// ============================================================
+// RECURRING TRANSACTION DETECTION — 28-35 day intervals
+// ============================================================
+export interface RecurringCandidate {
+  merchantName: string;
+  averageAmount: number;
+  occurrences: number;
+  averageIntervalDays: number;
+  nextExpectedDate: Date;
+  confidence: 'high' | 'medium';
+}
+
+export const detectRecurringTransactions = (
+  expenses: Array<{ merchantName: string; total: number; date: Date }>
+): RecurringCandidate[] => {
+  // Group by normalised merchant name
+  const byMerchant: Record<string, Array<{ amount: number; date: Date }>> = {};
+  for (const exp of expenses) {
+    const key = exp.merchantName.trim().toLowerCase();
+    if (!byMerchant[key]) byMerchant[key] = [];
+    byMerchant[key].push({ amount: exp.total, date: exp.date });
+  }
+
+  const results: RecurringCandidate[] = [];
+
+  for (const [key, entries] of Object.entries(byMerchant)) {
+    if (entries.length < 2) continue;
+
+    // Sort chronologically
+    const sorted = [...entries].sort((a, b) => a.date.getTime() - b.date.getTime());
+
+    // Calculate intervals between consecutive entries
+    const intervals: number[] = [];
+    for (let i = 1; i < sorted.length; i++) {
+      const days = (sorted[i].date.getTime() - sorted[i - 1].date.getTime()) / (1000 * 60 * 60 * 24);
+      intervals.push(days);
+    }
+
+    // Check if all intervals are in the 25-40 day window (monthly ±5 days)
+    const inRange = intervals.filter(d => d >= 25 && d <= 40);
+    if (inRange.length === 0) continue;
+    if (inRange.length / intervals.length < 0.5) continue;
+
+    const avgInterval = inRange.reduce((a, b) => a + b, 0) / inRange.length;
+    const avgAmount = sorted.reduce((s, e) => s + e.amount, 0) / sorted.length;
+
+    // Amount consistency check: std dev < 20% of mean
+    const variance = sorted.reduce((s, e) => s + Math.pow(e.amount - avgAmount, 2), 0) / sorted.length;
+    const stdDev = Math.sqrt(variance);
+    if (stdDev / avgAmount > 0.3) continue;
+
+    const lastDate = sorted[sorted.length - 1].date;
+    const nextExpectedDate = new Date(lastDate.getTime() + avgInterval * 24 * 60 * 60 * 1000);
+
+    const originalName = expenses.find(e => e.merchantName.trim().toLowerCase() === key)?.merchantName || key;
+
+    results.push({
+      merchantName: originalName,
+      averageAmount: avgAmount,
+      occurrences: sorted.length,
+      averageIntervalDays: avgInterval,
+      nextExpectedDate,
+      confidence: inRange.length >= 2 && stdDev / avgAmount < 0.1 ? 'high' : 'medium',
+    });
+  }
+
+  return results.sort((a, b) => b.occurrences - a.occurrences);
+};
+
+// ============================================================
+// SAVINGS MOMENTUM — are you on track to hit your goal?
+// ============================================================
+export interface SavingsMomentum {
+  requiredMonthly: number;    // how much you need to save per month
+  currentMonthly: number;     // average you've been saving
+  monthsAhead: number;        // positive = ahead, negative = behind
+  projectedCompletionDate: Date | null;
+  onTrack: boolean;
+  message: string;            // human-readable status
+}
+
+export const calculateSavingsMomentum = (
+  targetAmount: number,
+  currentAmount: number,
+  targetDate: Date,
+  currentMonthlyContribution: number
+): SavingsMomentum => {
+  const now = new Date();
+  const msLeft = targetDate.getTime() - now.getTime();
+  const monthsLeft = Math.max(msLeft / (1000 * 60 * 60 * 24 * 30.44), 0.01);
+  const remaining = Math.max(targetAmount - currentAmount, 0);
+  const requiredMonthly = remaining / monthsLeft;
+
+  // How many months until goal at current rate
+  const monthsToGoal = currentMonthlyContribution > 0 ? remaining / currentMonthlyContribution : Infinity;
+  const projectedDate = isFinite(monthsToGoal)
+    ? new Date(now.getTime() + monthsToGoal * 30.44 * 24 * 60 * 60 * 1000)
+    : null;
+
+  const monthsAhead = monthsLeft - monthsToGoal;
+  const onTrack = currentMonthlyContribution >= requiredMonthly;
+
+  let message: string;
+  if (remaining <= 0) {
+    message = 'Goal reached!';
+  } else if (onTrack) {
+    const aheadMonths = Math.round(Math.abs(monthsAhead));
+    message = aheadMonths > 0 ? `${aheadMonths} month${aheadMonths > 1 ? 's' : ''} ahead of schedule` : 'Right on track';
+  } else {
+    const gap = requiredMonthly - currentMonthlyContribution;
+    message = `Behind by ${formatAUD(gap)}/month`;
+  }
+
+  return { requiredMonthly, currentMonthly: currentMonthlyContribution, monthsAhead, projectedCompletionDate: projectedDate, onTrack, message };
+};
+
+// ============================================================
 // FORMAT CURRENCY (AUD)
 // ============================================================
 export const formatAUD = (amount: number): string => {

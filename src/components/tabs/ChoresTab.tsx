@@ -1,16 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { motion } from 'motion/react';
 import { Plus, Check, Clock, User, Trash2, ChevronLeft } from 'lucide-react';
-import { 
-  collection, 
-  query, 
-  onSnapshot, 
-  addDoc, 
-  updateDoc, 
-  deleteDoc, 
-  doc, 
-  serverTimestamp, 
+import {
+  collection,
+  query,
+  onSnapshot,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  doc,
+  serverTimestamp,
   orderBy,
+  getDoc,
   Timestamp
 } from 'firebase/firestore';
 import { db } from '../../firebase';
@@ -39,15 +40,48 @@ interface Chore {
   createdAt: Timestamp;
 }
 
+// Pure fairness algorithm — no AI needed
+function calcFairnessScore(
+  chores: Chore[],
+  userId: string,
+  partnerId: string
+): { score: number; userCount: number; partnerCount: number; suggestUserId: string | null } {
+  const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const recent = chores.filter(c => c.completed && normalizeDate(c.completedAt) >= cutoff);
+  const userCount   = recent.filter(c => c.completedBy === userId).length;
+  const partnerCount = recent.filter(c => c.completedBy === partnerId).length;
+  const total = userCount + partnerCount;
+  if (total === 0) return { score: 100, userCount: 0, partnerCount: 0, suggestUserId: null };
+  const userShare = userCount / total;
+  // 100 = perfect 50/50; deduct 2 points for every 1% off balance
+  const score = Math.round(Math.max(0, 100 - Math.abs(userShare - 0.5) * 200));
+  const suggestUserId = userCount <= partnerCount ? userId : partnerId;
+  return { score, userCount, partnerCount, suggestUserId };
+}
+
 export default function ChoresTab({ onBack }: { onBack: () => void }) {
   const { user, householdId, userData } = useAuth();
   const [chores, Chores] = useState<Chore[]>([]);
+  const [partnerId, setPartnerId] = useState<string | null>(null);
+  const [partnerName, setPartnerName] = useState('Partner');
   const [isAddSheetOpen, setIsAddSheetOpen] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newDueDate, setNewDueDate] = useState(format(new Date(), "yyyy-MM-dd"));
 
   useEffect(() => {
-    if (!householdId) return;
+    if (!householdId || !user) return;
+
+    // Fetch partner ID from household
+    getDoc(doc(db, 'households', householdId)).then(snap => {
+      const memberIds: string[] = snap.data()?.memberIds || [];
+      const pid = memberIds.find(id => id !== user.uid) || null;
+      setPartnerId(pid);
+      if (pid) {
+        getDoc(doc(db, 'users', pid)).then(uSnap => {
+          setPartnerName(uSnap.data()?.displayName?.split(' ')[0] || 'Partner');
+        });
+      }
+    });
 
     const q = query(
       collection(db, 'households', householdId, 'chores'),
@@ -60,7 +94,7 @@ export default function ChoresTab({ onBack }: { onBack: () => void }) {
     });
 
     return () => unsubscribe();
-  }, [householdId]);
+  }, [householdId, user?.uid]);
 
   const handleAddChore = async () => {
     if (!newTitle.trim() || !householdId || !user) {
@@ -69,11 +103,17 @@ export default function ChoresTab({ onBack }: { onBack: () => void }) {
     }
 
     try {
+      // Auto-assign to whoever is behind on fairness
+      const assignTo = fairness?.suggestUserId || user.uid;
+      const assignName = assignTo === user.uid
+        ? (user.displayName || 'You')
+        : partnerName;
+
       await addDoc(collection(db, 'households', householdId, 'chores'), {
         title: newTitle,
         dueDate: Timestamp.fromDate(new Date(newDueDate)),
-        assignedTo: user.uid, // For now assign to self or partner
-        assignedToName: user.displayName || 'Partner',
+        assignedTo: assignTo,
+        assignedToName: assignName,
         completed: false,
         createdAt: serverTimestamp()
       });
@@ -119,6 +159,15 @@ export default function ChoresTab({ onBack }: { onBack: () => void }) {
   const activeChores = chores.filter(c => !c.completed);
   const completedChores = chores.filter(c => c.completed);
 
+  const fairness = useMemo(() => {
+    if (!user || !partnerId) return null;
+    return calcFairnessScore(chores, user.uid, partnerId);
+  }, [chores, user?.uid, partnerId]);
+
+  const suggestAssignName = fairness?.suggestUserId === user?.uid
+    ? (userData?.displayName?.split(' ')[0] || 'You')
+    : partnerName;
+
   return (
     <PageTransition>
       <div className="flex flex-col h-full bg-[#fcf9f4]">
@@ -139,6 +188,45 @@ export default function ChoresTab({ onBack }: { onBack: () => void }) {
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 pb-20 no-scrollbar">
+          {/* Fairness Score Card */}
+          {fairness && (
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-6 bg-[#EDE8DF] border border-[#D4CEC4] rounded-[20px] p-4"
+            >
+              <div className="flex items-center justify-between mb-3">
+                <p className="font-outfit text-[11px] uppercase tracking-widest text-[#6B6560]">30-day Fairness</p>
+                <span
+                  className="font-serif text-[22px]"
+                  style={{ color: fairness.score >= 80 ? '#7FAF7B' : fairness.score >= 50 ? '#B8955A' : '#C47B6A' }}
+                >
+                  {fairness.score}
+                </span>
+              </div>
+              {/* Bar */}
+              <div className="h-2 bg-[#D4CEC4] rounded-full overflow-hidden mb-3">
+                <motion.div
+                  initial={{ width: 0 }}
+                  animate={{ width: `${fairness.score}%` }}
+                  transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+                  className="h-full rounded-full"
+                  style={{ background: fairness.score >= 80 ? '#7FAF7B' : fairness.score >= 50 ? '#B8955A' : '#C47B6A' }}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <p className="font-outfit text-[12px] text-[#6B6560]">
+                  You: {fairness.userCount} · {partnerName}: {fairness.partnerCount}
+                </p>
+                {fairness.score < 90 && (
+                  <p className="font-outfit text-[11px] text-[#B8955A]">
+                    Next up: {suggestAssignName}
+                  </p>
+                )}
+              </div>
+            </motion.div>
+          )}
+
           {activeChores.length > 0 && (
             <div className="mb-8">
               <h3 className="font-outfit text-xs font-bold text-[#6B6560] uppercase tracking-widest mb-4">To Do</h3>
