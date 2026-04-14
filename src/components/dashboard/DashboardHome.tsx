@@ -400,22 +400,24 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
       const pId = hData?.memberIds?.find((id: string) => id !== user.uid);
       if (pId) setPartnerId(pId);
 
-      // ── Days Together ── use meetDate > anniversary > household creation
+      // ── Days Together ── shared household togetherDate > personal meetDate > creation
+      // NOTE: never fall back to anniversary — that's a different milestone
       const meetDate =
+        toDate(hData?.togetherDate) ||
         toDate(userData?.meetDate) ||
-        toDate(userData?.anniversary) ||
         toDate(hData?.meetDate) ||
         toDate(hData?.createdAt);
       if (meetDate) {
         setMilestones((m) => ({ ...m, met: Math.max(0, differenceInDays(new Date(), meetDate)) }));
       }
 
-      // ── Days Married ── user's own doc first ('anniversary' OR 'anniversaryDate'), then household
+      // ── Days Married ── shared household weddingDate > legacy fields
       const marriageDate =
-        toDate(userData?.anniversary) ||        // Settings saves this field
-        toDate(userData?.anniversaryDate) ||    // legacy
-        toDate(userData?.weddingDate) ||
-        toDate(hData?.anniversaryDate);
+        toDate(hData?.weddingDate) ||           // shared household field (set in Settings)
+        toDate(hData?.anniversaryDate) ||       // household legacy
+        toDate(userData?.anniversary) ||        // user legacy
+        toDate(userData?.anniversaryDate) ||
+        toDate(userData?.weddingDate);
       if (marriageDate) {
         setMilestones((m) => ({ ...m, married: Math.max(0, differenceInDays(new Date(), marriageDate)) }));
         // Days to next anniversary
@@ -445,13 +447,7 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
             }
           }
 
-          // Marriage date from partner as fallback
-          if (!userData?.anniversaryDate && !userData?.weddingDate && pData?.anniversaryDate) {
-            const mDate = toDate(pData.anniversaryDate);
-            if (mDate) {
-              setMilestones((m) => ({ ...m, married: Math.max(0, differenceInDays(new Date(), mDate)) }));
-            }
-          }
+          // No per-user fallback — wedding date is now a shared household field
         });
       }
       setLoaded(true);
