@@ -358,7 +358,13 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
   const [partnerData, setPartnerData] = useState<any>(null);
   const [partnerId, setPartnerId] = useState<string | null>(null);
   const [lastMemory, setLastMemory] = useState<any>(null);
+  const [firstMemory, setFirstMemory] = useState<any>(null);
   const [milestones, setMilestones] = useState({ met: 0, married: 0 });
+  const [streak, setStreak] = useState(0);
+  const [daysToAnniversary, setDaysToAnniversary] = useState<number | null>(null);
+  const [completedChores30d, setCompletedChores30d] = useState<Array<{ completedBy: string; completedAt: Date }>>([]);
+  const [savingsGoalFull, setSavingsGoalFull] = useState<{ name: string; targetAmount: number; currentAmount: number; targetDate: Date | null } | null>(null);
+  const [groceryRun, setGroceryRun] = useState<{ daysSinceLast: number; avgInterval: number } | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [insights, setInsights] = useState<Insight[] | null>(null);
   const [pulseData, setPulseData] = useState({
@@ -412,6 +418,11 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
         toDate(hData?.anniversaryDate);
       if (marriageDate) {
         setMilestones((m) => ({ ...m, married: Math.max(0, differenceInDays(new Date(), marriageDate)) }));
+        // Days to next anniversary
+        const today = new Date();
+        const next = new Date(today.getFullYear(), marriageDate.getMonth(), marriageDate.getDate());
+        if (next < today) next.setFullYear(today.getFullYear() + 1);
+        setDaysToAnniversary(differenceInDays(next, today));
       }
 
       if (pId) {
@@ -451,6 +462,45 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
       (snap) => { if (snap.docs[0]) setLastMemory(snap.docs[0].data()); }
     );
 
+    // First memory ever — for anniversary card
+    const unsubFirstMemory = onSnapshot(
+      query(collection(db, "households", householdId, "memories"), orderBy("date", "asc"), limit(1)),
+      (snap) => { if (snap.docs[0]) setFirstMemory(snap.docs[0].data()); }
+    );
+
+    // Relationship streak — consecutive days either user was active in app
+    // We use completed chores + completed groceries as activity signals (pure DB)
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const unsubStreakChores = onSnapshot(
+      query(
+        collection(db, "households", householdId, "chores"),
+        where("completed", "==", true),
+        orderBy("completedAt", "desc")
+      ),
+      (choreSnap) => {
+        const activeDays = new Set<string>();
+        const recent: Array<{ completedBy: string; completedAt: Date }> = [];
+        choreSnap.docs.forEach(d => {
+          const raw = d.data().completedAt;
+          const dt = raw?.toDate ? raw.toDate() : raw ? new Date(raw) : null;
+          if (dt && dt >= thirtyDaysAgo) {
+            activeDays.add(dt.toISOString().slice(0, 10));
+            recent.push({ completedBy: d.data().completedBy || '', completedAt: dt });
+          }
+        });
+        setCompletedChores30d(recent);
+        let count = 0;
+        const today = new Date();
+        for (let i = 0; i < 30; i++) {
+          const d = new Date(today);
+          d.setDate(today.getDate() - i);
+          if (activeDays.has(d.toISOString().slice(0, 10))) count++;
+          else if (i > 0) break;
+        }
+        setStreak(count);
+      }
+    );
+
     const unsubChores = onSnapshot(
       query(collection(db, "households", householdId, "chores"), where("completed", "==", false)),
       (snap) => setPulseData((p) => ({ ...p, chores: { count: snap.size } }))
@@ -465,13 +515,46 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
       query(collection(db, "households", householdId, "savingsGoals"), orderBy("currentAmount", "desc"), limit(1)),
       (snap) => {
         const g = snap.docs[0]?.data();
-        if (g) setPulseData((p) => ({
-          ...p,
-          goal: {
-            name: g.title,
-            progress: g.targetAmount > 0 ? Math.min(100, (g.currentAmount / g.targetAmount) * 100) : 0,
-          },
-        }));
+        if (g) {
+          setPulseData((p) => ({
+            ...p,
+            goal: {
+              name: g.title,
+              progress: g.targetAmount > 0 ? Math.min(100, (g.currentAmount / g.targetAmount) * 100) : 0,
+            },
+          }));
+          const td = g.targetDate?.toDate ? g.targetDate.toDate() : g.targetDate ? new Date(g.targetDate) : null;
+          setSavingsGoalFull({
+            name: g.title || '',
+            targetAmount: g.targetAmount || 0,
+            currentAmount: g.currentAmount || 0,
+            targetDate: td && !isNaN(td.getTime()) ? td : null,
+          });
+        }
+      }
+    );
+
+    const unsubGroceryDone = onSnapshot(
+      query(collection(db, "households", householdId, "groceries"), where("completed", "==", true), orderBy("completedAt", "desc"), limit(60)),
+      (snap) => {
+        const byDate: Record<string, number> = {};
+        snap.docs.forEach(d => {
+          const raw = d.data().completedAt;
+          const dt = raw?.toDate ? raw.toDate() : raw ? new Date(raw) : null;
+          if (dt) byDate[dt.toISOString().slice(0, 10)] = (byDate[dt.toISOString().slice(0, 10)] || 0) + 1;
+        });
+        const shopDates = Object.entries(byDate)
+          .filter(([, c]) => c >= 2)
+          .map(([d]) => new Date(d))
+          .sort((a, b) => a.getTime() - b.getTime());
+        if (shopDates.length >= 2) {
+          const intervals: number[] = [];
+          for (let i = 1; i < shopDates.length; i++)
+            intervals.push(differenceInDays(shopDates[i], shopDates[i - 1]));
+          const avg = Math.round(intervals.reduce((a, b) => a + b, 0) / intervals.length);
+          const last = shopDates[shopDates.length - 1];
+          setGroceryRun({ daysSinceLast: differenceInDays(new Date(), last), avgInterval: avg });
+        }
       }
     );
 
@@ -487,7 +570,7 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
       (snap) => setPulseData((p) => ({ ...p, event: { title: snap.docs[0]?.data()?.title || "Nothing planned" } }))
     );
 
-    return () => { unsubHousehold(); unsubMemory(); unsubChores(); unsubGoals(); unsubGrocery(); unsubEvent(); };
+    return () => { unsubHousehold(); unsubMemory(); unsubFirstMemory(); unsubChores(); unsubGoals(); unsubGrocery(); unsubEvent(); unsubStreakChores(); unsubGroceryDone(); };
   }, [householdId, user?.uid, userData]);
 
   // ── Proactive Brain ───────────────────────────────────────────────────────
@@ -508,6 +591,32 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
   }, [householdId, user?.uid, partnerId]);
 
   const heart = useHeartbeatState(!!partnerData?.isOnline, partnerData?.lastOnlineAt || null);
+
+  const fairnessData = useMemo(() => {
+    if (!user || !partnerId || completedChores30d.length === 0) return null;
+    const userCount = completedChores30d.filter(c => c.completedBy === user.uid).length;
+    const partnerCount = completedChores30d.filter(c => c.completedBy === partnerId).length;
+    const total = userCount + partnerCount;
+    if (total === 0) return null;
+    const score = Math.round(Math.max(0, 100 - Math.abs(userCount / total - 0.5) * 200));
+    const nextName = userCount >= partnerCount
+      ? (partnerData?.displayName?.split(' ')[0] || 'Partner')
+      : (userData?.displayName?.split(' ')[0] || 'You');
+    return { score, userCount, partnerCount, nextName };
+  }, [completedChores30d, user?.uid, partnerId, partnerData, userData]);
+
+  const savingsStatus = useMemo((): 'on_track' | 'behind' | 'goal_met' | null => {
+    if (!savingsGoalFull) return null;
+    if (savingsGoalFull.currentAmount >= savingsGoalFull.targetAmount) return 'goal_met';
+    if (!savingsGoalFull.targetDate) return null;
+    const now = new Date();
+    if (savingsGoalFull.targetDate <= now) return 'behind';
+    const msLeft = savingsGoalFull.targetDate.getTime() - now.getTime();
+    const totalMs = savingsGoalFull.targetDate.getTime() - (now.getTime() - 180 * 24 * 60 * 60 * 1000); // assume ~6mo history
+    const timeProgress = Math.max(0, 1 - msLeft / totalMs);
+    const amountProgress = savingsGoalFull.currentAmount / savingsGoalFull.targetAmount;
+    return amountProgress >= timeProgress * 0.85 ? 'on_track' : 'behind';
+  }, [savingsGoalFull]);
 
   // Pulse card configs — all fixed calculations
   const pulseCards = useMemo(() => [
@@ -742,56 +851,345 @@ export default function DashboardHome({ onNavigate }: { onNavigate: (t: string) 
           ))}
         </motion.section>
 
+        {/* ── Relationship Streak ──────────────────────────────────────── */}
+        {streak > 0 && (
+          <motion.section
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.38, type: "spring", stiffness: 260, damping: 22 }}
+            className="bg-white rounded-3xl px-5 py-4 border border-black/[0.04] flex items-center gap-4"
+            style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.05)" }}
+          >
+            <div className="relative flex-shrink-0">
+              <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-[28px]"
+                style={{ background: streak >= 7 ? '#FFF3CD' : '#FFF8EE' }}>
+                🔥
+              </div>
+              {streak >= 7 && (
+                <motion.div
+                  className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-[#FF6B00] flex items-center justify-center"
+                  animate={{ scale: [1, 1.2, 1] }}
+                  transition={{ duration: 2, repeat: Infinity }}
+                >
+                  <span className="text-white text-[9px] font-bold">✓</span>
+                </motion.div>
+              )}
+            </div>
+            <div className="flex-1">
+              <p className="font-serif text-[22px] text-[#1A1A1A] leading-none">
+                {streak} day{streak !== 1 ? 's' : ''}
+              </p>
+              <p className="font-outfit text-[12px] text-[#6B6560] mt-0.5">
+                {streak >= 14 ? 'Incredible streak — you\'re unstoppable 🏆' :
+                 streak >= 7  ? 'Amazing week together! Keep it going' :
+                 streak >= 3  ? 'Great momentum — don\'t break the chain' :
+                                'Activity streak — keep it going'}
+              </p>
+            </div>
+            <div className="flex-shrink-0 text-right">
+              <p className="font-outfit text-[9px] uppercase tracking-wider text-[#B8955A]">Streak</p>
+              <div className="flex gap-0.5 mt-1">
+                {Array.from({ length: Math.min(streak, 7) }).map((_, i) => (
+                  <div key={i} className="w-2 h-2 rounded-full bg-[#FF6B00] opacity-80" />
+                ))}
+              </div>
+            </div>
+          </motion.section>
+        )}
+
+        {/* ── Anniversary Countdown ─────────────────────────────────────── */}
+        {daysToAnniversary !== null && (
+          <motion.button
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.42, type: "spring", stiffness: 260, damping: 22 }}
+            onClick={() => onNavigate("together")}
+            className="w-full bg-white rounded-3xl overflow-hidden border border-black/[0.04] text-left"
+            style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.05)" }}
+          >
+            {firstMemory?.imageURL && (
+              <div className="relative h-28 overflow-hidden">
+                <img src={firstMemory.imageURL} alt="First memory" className="w-full h-full object-cover" />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
+                <p className="absolute bottom-2 left-4 font-serif italic text-white text-[11px] opacity-80">
+                  {firstMemory.caption || 'Our first memory together'}
+                </p>
+              </div>
+            )}
+            <div className="px-5 py-4 flex items-center justify-between">
+              <div>
+                <p className="font-outfit text-[9px] uppercase tracking-[0.18em] mb-1" style={{ color: `${GOLD}80` }}>
+                  Anniversary
+                </p>
+                <p className="font-serif text-[20px] text-[#1A1A1A] leading-tight">
+                  {daysToAnniversary === 0
+                    ? '🎉 Happy Anniversary!'
+                    : `${daysToAnniversary} day${daysToAnniversary !== 1 ? 's' : ''} away`}
+                </p>
+                {firstMemory && (
+                  <p className="font-outfit text-[11px] text-[#6B6560] mt-0.5">
+                    First memory: {firstMemory.date
+                      ? format(firstMemory.date?.toDate ? firstMemory.date.toDate() : new Date(firstMemory.date), 'd MMM yyyy')
+                      : '—'}
+                  </p>
+                )}
+              </div>
+              <span className="text-[32px]">💍</span>
+            </div>
+          </motion.button>
+        )}
+
         {/* ── Daily Pulse Grid ─────────────────────────────────────────── */}
         <motion.section variants={stagger} initial="hidden" animate="show" className="grid grid-cols-2 gap-3">
-          {pulseCards.map(({ icon, label, accent, body, badge, progress, onClick }, i) => (
-            <motion.button
-              key={label}
-              variants={rise}
-              whileHover={cardHover}
-              whileTap={cardTap}
-              onClick={onClick}
-              className="bg-white rounded-2xl p-4 text-left flex flex-col justify-between h-36 relative overflow-hidden border border-black/[0.04]"
-              style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.05)" }}
-            >
-              {/* Left accent border */}
-              <div className="absolute left-0 top-4 bottom-4 w-[3px] rounded-r-full" style={{ background: accent }} />
-              <div className="flex justify-between items-start pl-3">
-                <span
-                  className="material-symbols-outlined text-[22px]"
-                  style={{ color: accent, fontVariationSettings: "'FILL' 1" }}
-                >
-                  {icon}
-                </span>
-                {badge != null && (
-                  <motion.span
-                    initial={{ scale: 0 }}
-                    animate={{ scale: 1 }}
-                    transition={{ type: "spring", stiffness: 400, delay: 0.3 + i * 0.07 }}
-                    className="text-[10px] font-bold px-2 py-0.5 rounded-full"
-                    style={{ background: `${accent}20`, color: accent }}
-                  >
-                    {badge}
+
+          {/* ── CHORES CARD ── */}
+          <motion.button
+            variants={rise} whileHover={cardHover} whileTap={cardTap}
+            onClick={() => onNavigate("chores")}
+            className="relative bg-white rounded-[22px] p-4 text-left flex flex-col justify-between overflow-hidden border border-black/[0.04]"
+            style={{ minHeight: 148, boxShadow: "0 8px 32px rgba(91,104,232,0.10)" }}
+          >
+            {/* Glow blob */}
+            <div className="absolute -top-4 -right-4 w-24 h-24 rounded-full pointer-events-none"
+              style={{ background: "radial-gradient(circle, #5B68E825 0%, transparent 70%)" }} />
+            <div className="absolute left-0 top-4 bottom-4 w-[3px] rounded-r-full bg-[#5B68E8]" />
+
+            {/* Top row */}
+            <div className="flex justify-between items-start pl-3">
+              <span className="material-symbols-outlined text-[22px]" style={{ color: "#5B68E8", fontVariationSettings: "'FILL' 1" }}>task_alt</span>
+              <AnimatePresence mode="wait">
+                {pulseData.chores.count > 0 ? (
+                  <motion.span key="count" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}
+                    transition={{ type: "spring", stiffness: 500, damping: 22 }}
+                    className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#5B68E820] text-[#5B68E8]">
+                    {pulseData.chores.count}
+                  </motion.span>
+                ) : (
+                  <motion.span key="done" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}
+                    transition={{ type: "spring", stiffness: 500, damping: 22 }}
+                    className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#7FAF7B20] text-[#7FAF7B]">
+                    ✓
                   </motion.span>
                 )}
-              </div>
-              <div className="pl-3">
-                <p className="text-[9px] font-bold uppercase tracking-[0.14em] mb-1" style={{ color: `${accent}80` }}>{label}</p>
-                <p className="text-[13px] font-semibold text-[#1A1A1A] leading-tight line-clamp-2">{body}</p>
-                {progress != null && progress > 0 && (
-                  <div className="mt-2 h-1 bg-[#EDE8DF] rounded-full overflow-hidden">
+              </AnimatePresence>
+            </div>
+
+            {/* Body */}
+            <div className="pl-3 mt-1">
+              <p className="text-[9px] font-bold uppercase tracking-[0.14em] mb-0.5" style={{ color: "#5B68E880" }}>Chores</p>
+              <AnimatePresence mode="wait">
+                <motion.p key={pulseData.chores.count} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.25 }}
+                  className="text-[13px] font-semibold text-[#1A1A1A] leading-tight">
+                  {pulseData.chores.count > 0
+                    ? `${pulseData.chores.count} task${pulseData.chores.count > 1 ? 's' : ''} to do`
+                    : "All caught up ✓"}
+                </motion.p>
+              </AnimatePresence>
+
+              {/* Fairness bar */}
+              {fairnessData && (
+                <div className="mt-2.5">
+                  <div className="h-1.5 bg-[#EDE8DF] rounded-full overflow-hidden">
                     <motion.div
                       initial={{ width: 0 }}
-                      animate={{ width: `${progress}%` }}
-                      transition={{ duration: 1.5, ease: "easeOut", delay: 0.8 }}
+                      animate={{ width: `${fairnessData.score}%` }}
+                      transition={{ duration: 1.2, ease: [0.16, 1, 0.3, 1], delay: 0.4 }}
                       className="h-full rounded-full"
-                      style={{ background: accent }}
+                      style={{ background: fairnessData.score >= 75 ? '#7FAF7B' : fairnessData.score >= 50 ? '#5B68E8' : '#C47B6A' }}
                     />
                   </div>
+                  <p className="text-[10px] text-[#6B6560] mt-1">
+                    Fairness {fairnessData.score} · <span style={{ color: "#5B68E8" }}>{fairnessData.nextName}</span> next
+                  </p>
+                </div>
+              )}
+            </div>
+          </motion.button>
+
+          {/* ── SAVINGS CARD ── */}
+          <motion.button
+            variants={rise} whileHover={cardHover} whileTap={cardTap}
+            onClick={() => onNavigate("finances")}
+            className="relative bg-white rounded-[22px] p-4 text-left flex flex-col justify-between overflow-hidden border border-black/[0.04]"
+            style={{ minHeight: 148, boxShadow: `0 8px 32px ${GOLD}18` }}
+          >
+            <div className="absolute -top-4 -right-4 w-24 h-24 rounded-full pointer-events-none"
+              style={{ background: `radial-gradient(circle, ${GOLD}22 0%, transparent 70%)` }} />
+            <div className="absolute left-0 top-4 bottom-4 w-[3px] rounded-r-full" style={{ background: GOLD }} />
+
+            {/* Top row */}
+            <div className="flex justify-between items-start pl-3">
+              <span className="material-symbols-outlined text-[22px]" style={{ color: GOLD, fontVariationSettings: "'FILL' 1" }}>savings</span>
+              {savingsStatus && (
+                <motion.span initial={{ scale: 0 }} animate={{ scale: 1 }}
+                  transition={{ type: "spring", stiffness: 500, damping: 22, delay: 0.3 }}
+                  className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                  style={savingsStatus === 'on_track' || savingsStatus === 'goal_met'
+                    ? { background: '#7FAF7B20', color: '#2E7D32' }
+                    : { background: '#FF980020', color: '#E65100' }}>
+                  {savingsStatus === 'goal_met' ? '🎉 Done' : savingsStatus === 'on_track' ? '✓ On track' : '⚠ Behind'}
+                </motion.span>
+              )}
+              {!savingsStatus && pulseData.goal.progress > 0 && (
+                <motion.span initial={{ scale: 0 }} animate={{ scale: 1 }}
+                  transition={{ type: "spring", stiffness: 500, damping: 22, delay: 0.3 }}
+                  className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                  style={{ background: `${GOLD}20`, color: GOLD }}>
+                  {Math.round(pulseData.goal.progress)}%
+                </motion.span>
+              )}
+            </div>
+
+            {/* Body */}
+            <div className="pl-3 mt-1">
+              <p className="text-[9px] font-bold uppercase tracking-[0.14em] mb-0.5" style={{ color: `${GOLD}80` }}>Savings</p>
+              <p className="text-[13px] font-semibold text-[#1A1A1A] leading-tight line-clamp-1">
+                {savingsGoalFull?.name || pulseData.goal.name || "Set a shared goal"}
+              </p>
+
+              {/* Dot progress */}
+              {pulseData.goal.progress > 0 && (
+                <div className="mt-2.5 flex gap-[3px]">
+                  {Array.from({ length: 10 }).map((_, i) => {
+                    const filled = i < Math.round(pulseData.goal.progress / 10);
+                    return (
+                      <motion.div
+                        key={i}
+                        initial={{ scale: 0 }}
+                        animate={{ scale: 1 }}
+                        transition={{ type: "spring", stiffness: 500, damping: 20, delay: 0.5 + i * 0.05 }}
+                        className="w-[18px] h-1.5 rounded-full flex-shrink-0"
+                        style={{ background: filled ? GOLD : '#EDE8DF' }}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+              {savingsGoalFull && savingsGoalFull.targetAmount > 0 && (
+                <p className="text-[10px] text-[#6B6560] mt-1">
+                  <span style={{ color: GOLD }}>${Math.round(savingsGoalFull.currentAmount).toLocaleString()}</span>
+                  {' '}/ ${Math.round(savingsGoalFull.targetAmount).toLocaleString()}
+                </p>
+              )}
+            </div>
+          </motion.button>
+
+          {/* ── GROCERY CARD ── */}
+          <motion.button
+            variants={rise} whileHover={cardHover} whileTap={cardTap}
+            onClick={() => onNavigate("grocery")}
+            className="relative bg-white rounded-[22px] p-4 text-left flex flex-col justify-between overflow-hidden border border-black/[0.04]"
+            style={{ minHeight: 148, boxShadow: "0 8px 32px rgba(59,170,124,0.10)" }}
+          >
+            <div className="absolute -top-4 -right-4 w-24 h-24 rounded-full pointer-events-none"
+              style={{ background: "radial-gradient(circle, #3BAA7C25 0%, transparent 70%)" }} />
+            <div className="absolute left-0 top-4 bottom-4 w-[3px] rounded-r-full bg-[#3BAA7C]" />
+
+            {/* Top row */}
+            <div className="flex justify-between items-start pl-3">
+              <span className="material-symbols-outlined text-[22px]" style={{ color: "#3BAA7C", fontVariationSettings: "'FILL' 1" }}>shopping_cart</span>
+              <AnimatePresence mode="wait">
+                {pulseData.grocery.count > 0 ? (
+                  <motion.span key="cnt" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}
+                    transition={{ type: "spring", stiffness: 500, damping: 22 }}
+                    className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#3BAA7C20] text-[#3BAA7C]">
+                    {pulseData.grocery.count}
+                  </motion.span>
+                ) : (
+                  <motion.span key="clear" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}
+                    transition={{ type: "spring", stiffness: 500, damping: 22 }}
+                    className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#3BAA7C20] text-[#3BAA7C]">
+                    ✓
+                  </motion.span>
                 )}
-              </div>
-            </motion.button>
-          ))}
+              </AnimatePresence>
+            </div>
+
+            {/* Body */}
+            <div className="pl-3 mt-1">
+              <p className="text-[9px] font-bold uppercase tracking-[0.14em] mb-0.5" style={{ color: "#3BAA7C80" }}>Grocery</p>
+              <AnimatePresence mode="wait">
+                <motion.p key={pulseData.grocery.count} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.25 }}
+                  className="text-[13px] font-semibold text-[#1A1A1A] leading-tight">
+                  {pulseData.grocery.count > 0
+                    ? `${pulseData.grocery.count} item${pulseData.grocery.count > 1 ? 's' : ''} left`
+                    : "List is clear"}
+                </motion.p>
+              </AnimatePresence>
+
+              {/* Grocery run chip */}
+              {groceryRun && (
+                <motion.div
+                  initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.5, duration: 0.3 }}
+                  className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full"
+                  style={{ background: groceryRun.daysSinceLast >= groceryRun.avgInterval ? '#3BAA7C15' : '#EDE8DF' }}
+                >
+                  <span className="text-[11px]">🛒</span>
+                  <span className="text-[10px] font-medium" style={{ color: groceryRun.daysSinceLast >= groceryRun.avgInterval ? '#3BAA7C' : '#6B6560' }}>
+                    {groceryRun.daysSinceLast >= groceryRun.avgInterval
+                      ? 'Shop run due'
+                      : `Shop in ~${groceryRun.avgInterval - groceryRun.daysSinceLast}d`}
+                  </span>
+                </motion.div>
+              )}
+            </div>
+          </motion.button>
+
+          {/* ── BIRTHDAY CARD ── */}
+          <motion.button
+            variants={rise} whileHover={cardHover} whileTap={cardTap}
+            onClick={() => onNavigate("together")}
+            className="relative bg-white rounded-[22px] p-4 text-left flex flex-col justify-between overflow-hidden border border-black/[0.04]"
+            style={{ minHeight: 148, boxShadow: "0 8px 32px rgba(225,123,155,0.10)" }}
+          >
+            <div className="absolute -top-4 -right-4 w-24 h-24 rounded-full pointer-events-none"
+              style={{ background: "radial-gradient(circle, #E17B9B25 0%, transparent 70%)" }} />
+            <div className="absolute left-0 top-4 bottom-4 w-[3px] rounded-r-full bg-[#E17B9B]" />
+
+            {/* Top row */}
+            <div className="flex justify-between items-start pl-3">
+              <span className="material-symbols-outlined text-[22px]" style={{ color: "#E17B9B", fontVariationSettings: "'FILL' 1" }}>cake</span>
+              {pulseData.birthday.days > 0 && pulseData.birthday.days <= 30 && (
+                <motion.span initial={{ scale: 0 }} animate={{ scale: 1 }}
+                  transition={{ type: "spring", stiffness: 500, damping: 22, delay: 0.35 }}
+                  className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#E17B9B20] text-[#E17B9B]">
+                  {pulseData.birthday.days}d
+                </motion.span>
+              )}
+            </div>
+
+            {/* Body */}
+            <div className="pl-3 mt-1">
+              <p className="text-[9px] font-bold uppercase tracking-[0.14em] mb-0.5" style={{ color: "#E17B9B80" }}>Birthday</p>
+              <p className="text-[13px] font-semibold text-[#1A1A1A] leading-tight line-clamp-2">
+                {pulseData.birthday.name && pulseData.birthday.days >= 0
+                  ? pulseData.birthday.days === 0
+                    ? `🎂 It's ${pulseData.birthday.name.split(' ')[0]}'s birthday!`
+                    : `${pulseData.birthday.name.split(' ')[0]}'s birthday in ${pulseData.birthday.days}d`
+                  : "No birthday soon"}
+              </p>
+
+              {/* Countdown dots strip (30 day scale) */}
+              {pulseData.birthday.days > 0 && pulseData.birthday.days <= 30 && (
+                <div className="mt-2.5 flex gap-[3px] flex-wrap">
+                  {Array.from({ length: Math.min(pulseData.birthday.days, 20) }).map((_, i) => (
+                    <motion.div
+                      key={i}
+                      initial={{ scale: 0 }}
+                      animate={{ scale: 1 }}
+                      transition={{ type: "spring", stiffness: 600, damping: 20, delay: 0.5 + i * 0.025 }}
+                      className="w-1.5 h-1.5 rounded-full"
+                      style={{ background: i < 3 ? '#E17B9B' : '#E17B9B50' }}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          </motion.button>
+
         </motion.section>
 
         {/* ── AI Relationship Insights ─────────────────────────────────── */}

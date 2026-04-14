@@ -15,7 +15,7 @@ import { useAuth } from '../AuthWrapper';
 import { db, storage } from '../../firebase';
 import {
   collection, query, onSnapshot, addDoc, serverTimestamp,
-  orderBy, doc, deleteDoc, Timestamp, getDoc, updateDoc
+  orderBy, doc, deleteDoc, Timestamp, getDoc, updateDoc, setDoc
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { format, startOfMonth, subMonths, addMonths } from 'date-fns';
@@ -24,7 +24,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { getCategoryDef, colors } from '../../design/tokens';
 import { categorizeItem } from '../../lib/categorization';
 import { useCurrencyCountUp, SPRING_DEFAULT, SPRING_BOUNCY, haptic, fireCelebration } from '../../lib/motion';
-import { buildMonthlyAggregates, forecastCategories, calculateBudgetHealth, formatAUD, formatCompact } from '../../lib/cashflow';
+import { buildMonthlyAggregates, forecastCategories, calculateBudgetHealth, calculateSpendVelocity, detectRecurringTransactions, calculateSavingsMomentum, formatAUD, formatCompact } from '../../lib/cashflow';
 import BankImportFlow from '../finance/BankImportFlow';
 
 // ============================================================
@@ -518,6 +518,8 @@ function ScanReceiptSheet({
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
   const [imageURL, setImageURL] = useState<string | null>(null);
+  // Price history: item name → previous price
+  const [priceHistory, setPriceHistory] = useState<Record<string, number>>({});
 
   const handleFile = async (file: File) => {
     setScanning(true);
@@ -526,6 +528,16 @@ function ScanReceiptSheet({
     try {
       const result = await scanReceipt(file, householdId);
       setScanned(result);
+      // Load previous prices for each scanned item
+      const history: Record<string, number> = {};
+      await Promise.all(result.lineItems.map(async (item) => {
+        const key = item.name.trim().toLowerCase().replace(/\s+/g, '_');
+        try {
+          const snap = await getDoc(doc(db, `households/${householdId}/priceHistory`, key));
+          if (snap.exists()) history[item.name] = snap.data().price;
+        } catch { /* ignore */ }
+      }));
+      setPriceHistory(history);
     } catch (e: any) {
       setError(e.message || 'Could not read receipt');
     } finally {
@@ -573,6 +585,18 @@ function ScanReceiptSheet({
         source: 'receipt_scan',
         createdAt: serverTimestamp(),
       });
+
+      // Write latest price for each line item to priceHistory (upsert by item key)
+      await Promise.all(scanned.lineItems.map(async (item) => {
+        const key = item.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
+        try {
+          await setDoc(
+            doc(db, `households/${householdId}/priceHistory`, key),
+            { price: item.price, name: item.name, merchant: scanned.merchantName, updatedAt: serverTimestamp() },
+            { merge: true }
+          );
+        } catch { /* ignore — non-critical */ }
+      }));
 
       haptic.success();
       onSaved();
@@ -740,6 +764,8 @@ function ScanReceiptSheet({
                   {scanned.lineItems.map((item, i) => {
                     const catDef = getCategoryDef(item.category);
                     const unitP = (item as any).unitPrice || item.price / (item.quantity || 1);
+                    const prevPrice = priceHistory[item.name];
+                    const priceDiff = prevPrice !== undefined ? item.price - prevPrice : null;
                     return (
                       <motion.div
                         key={i}
@@ -751,17 +777,24 @@ function ScanReceiptSheet({
                         }`}
                       >
                         <span className="text-[14px] flex-shrink-0">{catDef.emoji}</span>
-                        <span className="flex-1 font-outfit text-[12px] text-[#1A1A1A] truncate">{item.name}</span>
+                        <div className="flex-1 min-w-0">
+                          <span className="font-outfit text-[12px] text-[#1A1A1A] truncate block">{item.name}</span>
+                          {priceDiff !== null && Math.abs(priceDiff) > 0.005 && (
+                            <span className={`font-outfit text-[10px] font-medium ${priceDiff > 0 ? 'text-[#C47B6A]' : 'text-[#7FAF7B]'}`}>
+                              {priceDiff > 0 ? '↑' : '↓'} {formatAUD(Math.abs(priceDiff))} vs last time
+                            </span>
+                          )}
+                        </div>
                         {(item.quantity || 1) > 1 ? (
-                          <span className="w-24 text-right font-outfit text-[11px] text-[#6B6560]">
+                          <span className="w-20 text-right font-outfit text-[11px] text-[#6B6560]">
                             {item.quantity}×{formatAUD(unitP)}
                           </span>
                         ) : (
-                          <span className="w-24 text-right font-outfit text-[11px] text-[#6B6560]">
+                          <span className="w-20 text-right font-outfit text-[11px] text-[#6B6560]">
                             {formatAUD(unitP)}
                           </span>
                         )}
-                        <span className="w-16 text-right font-outfit text-[13px] text-[#1A1A1A] font-semibold">
+                        <span className="w-14 text-right font-outfit text-[13px] text-[#1A1A1A] font-semibold">
                           {formatAUD(item.price)}
                         </span>
                       </motion.div>
@@ -818,6 +851,7 @@ export default function FinancesTab() {
   const [searchQuery, setSearchQuery] = useState('');
   const [monthlyBudget, setMonthlyBudget] = useState(3000);
   const [partnerData, setPartnerData] = useState<any>(null);
+  const [savingsGoals, setSavingsGoals] = useState<any[]>([]);
 
   // ---- Data listeners ----
   useEffect(() => {
@@ -857,7 +891,12 @@ export default function FinancesTab() {
       }
     );
 
-    return () => { unsubExpenses(); unsubBank(); };
+    const unsubGoals = onSnapshot(
+      query(collection(db, `households/${householdId}/savingsGoals`), orderBy('currentAmount', 'desc')),
+      snap => setSavingsGoals(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    );
+
+    return () => { unsubExpenses(); unsubBank(); unsubGoals(); };
   }, [householdId]);
 
   // Load monthly budget from Firestore (set in Settings)
@@ -930,6 +969,32 @@ export default function FinancesTab() {
     calculateBudgetHealth(monthlyBudget, totalSpent, monthIncome, 0),
     [monthlyBudget, totalSpent, monthIncome]
   );
+
+  const spendVelocity = useMemo(() => {
+    const now = viewMonth;
+    const isCurrentMonth = format(now, 'yyyy-MM') === format(new Date(), 'yyyy-MM');
+    if (!isCurrentMonth || monthlyBudget <= 0) return null;
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    return calculateSpendVelocity(totalSpent, monthlyBudget, new Date().getDate(), daysInMonth);
+  }, [totalSpent, monthlyBudget, viewMonth]);
+
+  const recurringCandidates = useMemo(() =>
+    detectRecurringTransactions(expenses),
+    [expenses]
+  );
+
+  const savingsMomentum = useMemo(() => {
+    const goal = savingsGoals[0];
+    if (!goal || !goal.targetAmount || !goal.targetDate) return null;
+    const targetDate = goal.targetDate?.toDate ? goal.targetDate.toDate() : new Date(goal.targetDate);
+    if (isNaN(targetDate.getTime())) return null;
+    // Estimate monthly contribution from monthIncome savings rate
+    const monthlyContrib = monthIncome > 0 ? Math.max(0, monthIncome - totalSpent) : 0;
+    return {
+      goal,
+      momentum: calculateSavingsMomentum(goal.targetAmount, goal.currentAmount || 0, targetDate, monthlyContrib),
+    };
+  }, [savingsGoals, monthIncome, totalSpent]);
 
   // All-time aggregates for ML
   const allTimeAggregates = useMemo(() => {
@@ -1138,6 +1203,46 @@ export default function FinancesTab() {
                 </div>
               </div>
             </div>
+
+            {/* Spend Velocity Banner */}
+            {spendVelocity && !spendVelocity.isOnTrack && (
+              <div className="px-5 mb-4">
+                <motion.div
+                  initial={{ opacity: 0, y: -8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="bg-[#FFF3E0] border border-[#FF9800]/30 rounded-[18px] p-4 flex items-start gap-3"
+                >
+                  <span className="text-[18px] flex-shrink-0 mt-0.5">⚠️</span>
+                  <div>
+                    <p className="font-outfit text-[13px] font-semibold text-[#E65100]">
+                      At this rate you'll overspend by {formatAUD(spendVelocity.overspendAmount)}
+                    </p>
+                    <p className="font-outfit text-[11px] text-[#BF360C] mt-0.5">
+                      {formatAUD(spendVelocity.dailyRate)}/day · {spendVelocity.daysLeft} days left · projected {formatAUD(spendVelocity.projectedMonthEnd)}
+                    </p>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+            {spendVelocity && spendVelocity.isOnTrack && spendVelocity.daysLeft > 0 && (
+              <div className="px-5 mb-4">
+                <motion.div
+                  initial={{ opacity: 0, y: -8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="bg-[#E8F5E9] border border-[#4CAF50]/30 rounded-[18px] p-4 flex items-start gap-3"
+                >
+                  <span className="text-[18px] flex-shrink-0 mt-0.5">✅</span>
+                  <div>
+                    <p className="font-outfit text-[13px] font-semibold text-[#2E7D32]">
+                      On track — {formatAUD(monthlyBudget - spendVelocity.projectedMonthEnd)} to spare
+                    </p>
+                    <p className="font-outfit text-[11px] text-[#388E3C] mt-0.5">
+                      {formatAUD(spendVelocity.dailyRate)}/day · {spendVelocity.daysLeft} days left
+                    </p>
+                  </div>
+                </motion.div>
+              </div>
+            )}
 
             {/* Category Donut */}
             {categoryTotals.length > 0 && (
@@ -1353,6 +1458,120 @@ export default function FinancesTab() {
                       </div>
                     );
                   })}
+                </div>
+              </div>
+            )}
+
+            {/* Savings Momentum — Feature 7 */}
+            {savingsMomentum && (
+              <div className="px-5 mb-5">
+                <p className="font-outfit text-[11px] uppercase tracking-[2.5px] text-[#B8955A] mb-3">Savings Momentum</p>
+                <div className="p-4 bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl">
+                  <div className="flex items-start justify-between mb-3">
+                    <div>
+                      <p className="font-outfit text-[13px] font-medium text-[#1A1A1A]">{savingsMomentum.goal.title}</p>
+                      <p className="font-outfit text-[11px] text-[#6B6560] mt-0.5">{savingsMomentum.momentum.message}</p>
+                    </div>
+                    <span className={`font-outfit text-[11px] px-2.5 py-1 rounded-full font-semibold ${
+                      savingsMomentum.momentum.onTrack
+                        ? 'bg-[#E8F5E9] text-[#2E7D32]'
+                        : 'bg-[#FFF3E0] text-[#E65100]'
+                    }`}>
+                      {savingsMomentum.momentum.onTrack ? '✓ On track' : '⚠ Behind'}
+                    </span>
+                  </div>
+                  {/* Progress bar */}
+                  <div className="h-2 bg-[#D4CEC4] rounded-full overflow-hidden mb-2">
+                    <motion.div
+                      initial={{ width: 0 }}
+                      animate={{ width: `${Math.min(100, (savingsMomentum.goal.currentAmount / savingsMomentum.goal.targetAmount) * 100)}%` }}
+                      transition={{ duration: 1, ease: [0.16, 1, 0.3, 1] }}
+                      className="h-full rounded-full"
+                      style={{ background: savingsMomentum.momentum.onTrack ? '#7FAF7B' : '#B8955A' }}
+                    />
+                  </div>
+                  <div className="flex justify-between">
+                    <p className="font-outfit text-[11px] text-[#6B6560]">{formatAUD(savingsMomentum.goal.currentAmount || 0)} saved</p>
+                    <p className="font-outfit text-[11px] text-[#6B6560]">Goal: {formatAUD(savingsMomentum.goal.targetAmount)}</p>
+                  </div>
+                  <div className="mt-3 pt-3 border-t border-[#D4CEC4] grid grid-cols-2 gap-3">
+                    <div>
+                      <p className="font-outfit text-[9px] uppercase tracking-wider text-[#6B6560]">Need/month</p>
+                      <p className="font-serif text-[16px] text-[#1A1A1A]">{formatAUD(savingsMomentum.momentum.requiredMonthly)}</p>
+                    </div>
+                    <div>
+                      <p className="font-outfit text-[9px] uppercase tracking-wider text-[#6B6560]">Saving/month</p>
+                      <p className="font-serif text-[16px]" style={{ color: savingsMomentum.momentum.onTrack ? '#7FAF7B' : '#C47B6A' }}>
+                        {formatAUD(savingsMomentum.momentum.currentMonthly)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Recurring Subscriptions — Feature 5 */}
+            {recurringCandidates.length > 0 && (
+              <div className="px-5 mb-5">
+                <p className="font-outfit text-[11px] uppercase tracking-[2.5px] text-[#B8955A] mb-3">Detected Subscriptions</p>
+                <div className="space-y-2">
+                  {recurringCandidates.slice(0, 5).map((r, i) => (
+                    <div key={i} className="flex items-center gap-3 p-3.5 bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl">
+                      <div className="w-9 h-9 rounded-xl bg-white/60 flex items-center justify-center flex-shrink-0">
+                        <span className="text-[16px]">🔄</span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-outfit text-[13px] font-medium text-[#1A1A1A] truncate">{r.merchantName}</p>
+                        <p className="font-outfit text-[11px] text-[#6B6560]">
+                          Every ~{Math.round(r.averageIntervalDays)}d · {r.occurrences}× detected
+                        </p>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <p className="font-outfit text-[13px] font-semibold text-[#1A1A1A]">{formatAUD(r.averageAmount)}</p>
+                        <p className="font-outfit text-[10px]" style={{ color: r.confidence === 'high' ? '#7FAF7B' : '#B8955A' }}>
+                          {r.confidence} confidence
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Real Cash Flow — Feature 8 */}
+            {allTimeAggregates.length >= 2 && (
+              <div className="px-5 mb-5">
+                <p className="font-outfit text-[11px] uppercase tracking-[2.5px] text-[#B8955A] mb-3">Monthly Cash Flow</p>
+                <div className="bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl p-4">
+                  <div className="space-y-2">
+                    {allTimeAggregates.slice(-6).map((m, i) => {
+                      const isPositive = m.cashFlow >= 0;
+                      const maxAbs = Math.max(...allTimeAggregates.slice(-6).map(x => Math.abs(x.cashFlow)), 1);
+                      const pct = (Math.abs(m.cashFlow) / maxAbs) * 100;
+                      return (
+                        <div key={i} className="flex items-center gap-3">
+                          <p className="font-outfit text-[11px] text-[#6B6560] w-10 flex-shrink-0">
+                            {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m.month - 1]}
+                          </p>
+                          <div className="flex-1 h-5 bg-[#D4CEC4] rounded-full overflow-hidden relative">
+                            <motion.div
+                              initial={{ width: 0 }}
+                              animate={{ width: `${pct}%` }}
+                              transition={{ duration: 0.7, delay: i * 0.08, ease: [0.16, 1, 0.3, 1] }}
+                              className="h-full rounded-full"
+                              style={{ background: isPositive ? '#7FAF7B' : '#C47B6A' }}
+                            />
+                          </div>
+                          <p className={`font-outfit text-[11px] w-16 text-right flex-shrink-0 ${isPositive ? 'text-[#2E7D32]' : 'text-[#C47B6A]'}`}>
+                            {isPositive ? '+' : ''}{formatCompact(m.cashFlow)}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="font-outfit text-[10px] text-[#6B6560] mt-3 text-center">
+                    Income minus expenses — green = surplus, red = deficit
+                  </p>
                 </div>
               </div>
             )}
