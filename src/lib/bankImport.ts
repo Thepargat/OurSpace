@@ -200,8 +200,11 @@ export const processImportInBackground = async (
   }
 
   // Which pages still need processing?
+  // Exclude BOTH processedPages and failedPages — failed pages only retry
+  // when the user explicitly taps "Retry" (via retryFailedPages()).
+  const skipSet = new Set([...processedPages, ...failedPages]);
   const toProcess = Array.from({ length: totalPages }, (_, i) => i).filter(
-    (i) => !processedPages.includes(i)
+    (i) => !skipSet.has(i)
   );
 
   if (toProcess.length === 0) {
@@ -317,7 +320,7 @@ ${chunkText.substring(0, 14000)}`,
       });
     } catch (e) {
       console.warn(`[bankImport] pages ${chunkIndices} failed:`, e);
-      newFailed.push(...chunkIndices);
+      chunkIndices.forEach(idx => { if (!newFailed.includes(idx)) newFailed.push(idx); });
       // Save failed state but keep going with remaining chunks
       await updateDoc(doc(db, importPath), {
         failedPages: newFailed,
