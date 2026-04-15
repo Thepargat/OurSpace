@@ -1,17 +1,23 @@
 /**
  * OurSpace — Bank Import Flow
- * Supports CSV (CommBank, NAB, ANZ, Westpac, generic) and PDF (Gemini Vision)
+ * Supports CSV (CommBank, NAB, ANZ, Westpac, generic) and PDF (smart: regex-first, AI fallback)
+ * Uses batchCategorizeWithCache — only calls AI for unknown merchants
  */
 
 import { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Upload, X, Check, AlertTriangle, Loader2 } from 'lucide-react';
-import { parseCSV, parsePDF, checkDuplicate, BankTransaction } from '../../lib/bankParsers';
+import { Upload, X, Check, AlertTriangle, Loader2, Zap, Database } from 'lucide-react';
+import {
+  parseCSV,
+  parsePDFSmart,
+  batchCategorizeWithCache,
+  checkDuplicate,
+  BankTransaction,
+} from '../../lib/bankParsers';
 import { useAuth } from '../AuthWrapper';
 import { db } from '../../firebase';
 import { collection, addDoc, serverTimestamp, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import { getCategoryDef } from '../../design/tokens';
-import { categorizeItem } from '../../lib/categorization';
 import { formatAUD } from '../../lib/cashflow';
 import { SPRING_DEFAULT, SPRING_BOUNCY } from '../../lib/motion';
 
@@ -24,7 +30,8 @@ type Step = 'upload' | 'preview' | 'importing' | 'done';
 
 interface PreviewTransaction extends BankTransaction {
   category: string;
-  categoryConfidence: number;
+  subcategory?: string;
+  fromCache: boolean;
   selected: boolean;
   isDuplicate: boolean;
   matchedMerchant?: string;
@@ -39,6 +46,8 @@ export default function BankImportFlow({ onClose, onImported }: Props) {
   const [error, setError] = useState('');
   const [activeFilter, setActiveFilter] = useState<'all' | 'expenses' | 'income' | 'duplicates'>('all');
   const [processingProgress, setProcessingProgress] = useState(0);
+  const [processingStatus, setProcessingStatus] = useState('');
+  const [cacheHits, setCacheHits] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const handleFile = async (file: File) => {
@@ -46,23 +55,29 @@ export default function BankImportFlow({ onClose, onImported }: Props) {
     setError('');
     setStep('preview');
     setProcessingProgress(0);
+    setProcessingStatus('Reading file...');
 
     try {
       let raw: BankTransaction[] = [];
 
       if (file.name.toLowerCase().endsWith('.pdf')) {
-        setProcessingProgress(10);
-        raw = await parsePDF(file);
-        setProcessingProgress(50);
+        raw = await parsePDFSmart(file, (pct, status) => {
+          setProcessingProgress(pct * 0.4); // PDF parsing is 0-40%
+          setProcessingStatus(status);
+        });
       } else {
         const text = await file.text();
         raw = parseCSV(text, file.name);
-        setProcessingProgress(30);
+        setProcessingProgress(15);
+        setProcessingStatus(`Parsed ${raw.length} transactions`);
       }
+
+      setProcessingProgress(40);
+      setProcessingStatus('Checking for duplicates...');
 
       // Fetch existing expenses for duplicate check
       const expSnap = await getDocs(
-        query(collection(db, `households/${householdId}/expenses`), orderBy('date', 'desc'), limit(200))
+        query(collection(db, `households/${householdId}/expenses`), orderBy('date', 'desc'), limit(500))
       );
       const existingExpenses = expSnap.docs.map(d => ({
         id: d.id,
@@ -71,33 +86,46 @@ export default function BankImportFlow({ onClose, onImported }: Props) {
         date: d.data().date?.toDate() || new Date(),
       }));
 
-      setProcessingProgress(60);
+      setProcessingProgress(50);
+      setProcessingStatus('Checking merchant cache...');
 
-      // Categorize + duplicate check
-      const previews: PreviewTransaction[] = await Promise.all(
-        raw.slice(0, 500).map(async (tx, i) => {
-          const catResult = tx.type === 'debit'
-            ? await categorizeItem(tx.cleanDescription, tx.cleanDescription, householdId)
-            : { cat: 'income', confidence: 1.0 };
-
-          const dupCheck = tx.type === 'debit'
-            ? checkDuplicate(tx, existingExpenses)
-            : { isDuplicate: false };
-
-          setProcessingProgress(60 + (i / raw.length) * 35);
-
-          return {
-            ...tx,
-            category: catResult.cat,
-            categoryConfidence: catResult.confidence,
-            selected: !dupCheck.isDuplicate,
-            isDuplicate: dupCheck.isDuplicate,
-            matchedMerchant: dupCheck.matchedMerchant,
-          };
-        })
+      // Batch categorize with cache (checks Firestore cache first, AI only for unknowns)
+      const txsToProcess = raw.slice(0, 500);
+      const categorizations = await batchCategorizeWithCache(
+        txsToProcess.map(tx => ({ description: tx.cleanDescription || tx.description, type: tx.type })),
+        householdId,
+        (pct) => {
+          setProcessingProgress(50 + pct * 0.45); // categorization is 50-95%
+          if (pct < 35) setProcessingStatus('Checking merchant cache...');
+          else if (pct < 100) setProcessingStatus('Categorizing unknown merchants with AI...');
+          else setProcessingStatus('Done categorizing');
+        }
       );
 
+      // Count cache hits
+      const hits = categorizations.filter(c => c.fromCache).length;
+      setCacheHits(hits);
+
+      // Build preview transactions
+      const previews: PreviewTransaction[] = txsToProcess.map((tx, i) => {
+        const cat = categorizations[i] || { category: 'other', fromCache: false };
+        const dupCheck = tx.type === 'debit'
+          ? checkDuplicate(tx, existingExpenses)
+          : { isDuplicate: false };
+
+        return {
+          ...tx,
+          category: cat.category,
+          subcategory: cat.subcategory,
+          fromCache: cat.fromCache,
+          selected: !dupCheck.isDuplicate,
+          isDuplicate: dupCheck.isDuplicate,
+          matchedMerchant: (dupCheck as any).matchedMerchant,
+        };
+      });
+
       setProcessingProgress(100);
+      setProcessingStatus(`Found ${previews.length} transactions`);
       setTransactions(previews);
     } catch (e: any) {
       setError(e.message || 'Failed to parse file');
@@ -120,11 +148,12 @@ export default function BankImportFlow({ onClose, onImported }: Props) {
           : `households/${householdId}/expenses`;
 
         await addDoc(collection(db, coll), {
-          merchantName: tx.cleanDescription,
+          merchantName: tx.cleanDescription || tx.description,
           description: tx.description,
           amount: Math.abs(tx.amount),
           total: Math.abs(tx.amount),
           category: tx.category,
+          subcategory: tx.subcategory || null,
           date: tx.date,
           type: tx.type,
           incomeType: tx.incomeType || null,
@@ -132,6 +161,7 @@ export default function BankImportFlow({ onClose, onImported }: Props) {
           importedAt: serverTimestamp(),
           importedBy: user.uid,
           source: 'bank_import',
+          budgetMonth: `${tx.date.getFullYear()}-${String(tx.date.getMonth() + 1).padStart(2, '0')}`,
           lineItems: [],
         });
         count++;
@@ -158,6 +188,8 @@ export default function BankImportFlow({ onClose, onImported }: Props) {
     duplicates: transactions.filter(t => t.isDuplicate).length,
     selected:   transactions.filter(t => t.selected).length,
   };
+
+  const aiCalls = transactions.length - cacheHits;
 
   return (
     <motion.div
@@ -222,10 +254,28 @@ export default function BankImportFlow({ onClose, onImported }: Props) {
                   </div>
                 )}
 
+                {/* Smart features badge */}
+                <div className="mt-6 p-4 bg-[#EDE8DF] rounded-2xl flex items-start gap-3">
+                  <Zap size={16} className="text-[#B8955A] flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-outfit text-[12px] font-semibold text-[#1A1A1A]">Smart categorization</p>
+                    <p className="font-outfit text-[11px] text-[#6B6560] mt-0.5">
+                      Merchants you've imported before are categorized instantly from cache — no AI needed.
+                    </p>
+                  </div>
+                </div>
+
                 {/* Supported formats */}
-                <div className="mt-8 space-y-2">
+                <div className="mt-6 space-y-2">
                   <p className="font-outfit text-[11px] uppercase tracking-widest text-[#B8955A] mb-3">Supported formats</p>
-                  {['CommBank CSV (Date, Amount, Description)', 'NAB CSV (all formats)', 'ANZ CSV', 'Westpac CSV', 'Any bank PDF statement (AI-powered)', 'Generic CSV with date + amount'].map(f => (
+                  {[
+                    'CommBank CSV (Date, Amount, Description)',
+                    'NAB CSV (all formats)',
+                    'ANZ CSV',
+                    'Westpac CSV',
+                    'Any bank PDF statement (text extraction + AI fallback)',
+                    'Generic CSV with date + amount',
+                  ].map(f => (
                     <div key={f} className="flex items-center gap-2">
                       <Check size={12} className="text-[#4CAF50]" />
                       <span className="font-outfit text-[13px] text-[#6B6560]">{f}</span>
@@ -242,13 +292,13 @@ export default function BankImportFlow({ onClose, onImported }: Props) {
                   <Loader2 size={28} className="text-[#B8955A] animate-spin" />
                 </div>
                 <h3 className="font-serif text-[20px] text-[#1A1A1A] mb-2">Reading your statement</h3>
-                <p className="font-outfit text-[13px] text-[#6B6560] mb-6">Categorizing transactions...</p>
+                <p className="font-outfit text-[13px] text-[#6B6560] mb-6">{processingStatus || 'Processing...'}</p>
                 <div className="w-full h-1.5 bg-[#D4CEC4] rounded-full overflow-hidden">
                   <motion.div
                     className="h-full bg-[#B8955A] rounded-full"
                     initial={{ width: 0 }}
                     animate={{ width: `${processingProgress}%` }}
-                    transition={{ duration: 0.5, ease: 'easeOut' }}
+                    transition={{ duration: 0.4, ease: 'easeOut' }}
                   />
                 </div>
                 <p className="font-outfit text-[12px] text-[#B8955A] mt-2">{Math.round(processingProgress)}%</p>
@@ -263,13 +313,22 @@ export default function BankImportFlow({ onClose, onImported }: Props) {
                   <p className="font-serif text-[18px] text-[#1A1A1A]">
                     Found <span className="text-[#B8955A]">{transactions.length}</span> transactions
                   </p>
-                  <div className="flex gap-4 mt-2">
+                  <div className="flex gap-4 mt-2 flex-wrap">
                     <span className="font-outfit text-[12px] text-[#4CAF50]">{stats.income} income</span>
                     <span className="font-outfit text-[12px] text-[#C47B6A]">{stats.expenses} expenses</span>
                     {stats.duplicates > 0 && (
-                      <span className="font-outfit text-[12px] text-[#FF9800]">{stats.duplicates} duplicates</span>
+                      <span className="font-outfit text-[12px] text-[#FF9800]">{stats.duplicates} possible duplicates</span>
                     )}
                   </div>
+                  {/* Cache efficiency badge */}
+                  {transactions.length > 0 && (
+                    <div className="flex items-center gap-1.5 mt-2">
+                      <Database size={11} className="text-[#B8955A]" />
+                      <span className="font-outfit text-[11px] text-[#6B6560]">
+                        {cacheHits} from cache · {aiCalls} categorized by AI
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Filter tabs */}
@@ -282,7 +341,7 @@ export default function BankImportFlow({ onClose, onImported }: Props) {
                   ] as const).map(tab => (
                     <button
                       key={tab.key}
-                      onClick={() => setActiveFilter(tab.key as any)}
+                      onClick={() => setActiveFilter(tab.key as 'all' | 'expenses' | 'income' | 'duplicates')}
                       className={`px-4 py-2 rounded-full font-outfit text-[12px] whitespace-nowrap transition-colors ${
                         activeFilter === tab.key
                           ? 'bg-[#1A1A1A] text-white'
@@ -294,7 +353,7 @@ export default function BankImportFlow({ onClose, onImported }: Props) {
                   ))}
                 </div>
 
-                {/* Select all */}
+                {/* Select all / deselect */}
                 <div className="flex items-center justify-between mb-3">
                   <button
                     className="font-outfit text-[12px] text-[#B8955A]"
@@ -330,7 +389,7 @@ export default function BankImportFlow({ onClose, onImported }: Props) {
                         {/* Category emoji */}
                         <div
                           className="w-9 h-9 rounded-full flex items-center justify-center text-[16px] flex-shrink-0"
-                          style={{ background: catDef.light }}
+                          style={{ background: tx.type === 'credit' ? '#E8F5E9' : catDef.light }}
                         >
                           {tx.type === 'credit' ? '💰' : catDef.emoji}
                         </div>
@@ -340,10 +399,19 @@ export default function BankImportFlow({ onClose, onImported }: Props) {
                           <p className="font-outfit text-[13px] text-[#1A1A1A] truncate font-medium">
                             {tx.cleanDescription || tx.description}
                           </p>
-                          <p className="font-outfit text-[11px] text-[#6B6560]">
-                            {tx.date.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}
-                            {tx.isDuplicate && <span className="ml-2 text-[#FF9800]">⚠ Possibly already scanned</span>}
-                          </p>
+                          <div className="flex items-center gap-2">
+                            <p className="font-outfit text-[11px] text-[#6B6560]">
+                              {tx.date.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}
+                            </p>
+                            {tx.fromCache && (
+                              <span className="font-outfit text-[10px] text-[#B8955A] bg-[#B8955A]/10 px-1.5 py-0.5 rounded-full">
+                                cached
+                              </span>
+                            )}
+                            {tx.isDuplicate && (
+                              <span className="font-outfit text-[10px] text-[#FF9800]">possibly scanned</span>
+                            )}
+                          </div>
                         </div>
 
                         {/* Amount */}
@@ -391,14 +459,25 @@ export default function BankImportFlow({ onClose, onImported }: Props) {
 
             {/* STEP: DONE */}
             {step === 'done' && (
-              <motion.div key="done" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={SPRING_BOUNCY} className="flex flex-col items-center justify-center pt-12 text-center">
+              <motion.div
+                key="done"
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={SPRING_BOUNCY}
+                className="flex flex-col items-center justify-center pt-12 text-center"
+              >
                 <div className="w-20 h-20 rounded-full bg-[#E8F5E9] flex items-center justify-center mb-6">
                   <Check size={36} className="text-[#4CAF50]" />
                 </div>
                 <h3 className="font-serif text-[24px] text-[#1A1A1A] mb-2">Imported!</h3>
-                <p className="font-outfit text-[15px] text-[#6B6560] mb-8">
+                <p className="font-outfit text-[15px] text-[#6B6560] mb-2">
                   {importedCount} transactions added to your finances
                 </p>
+                {cacheHits > 0 && (
+                  <p className="font-outfit text-[12px] text-[#B8955A] mb-8">
+                    {cacheHits} merchants were from cache — no AI needed
+                  </p>
+                )}
                 <button
                   onClick={onClose}
                   className="w-full h-14 rounded-full bg-[#1A1A1A] text-white font-outfit font-semibold text-[15px]"

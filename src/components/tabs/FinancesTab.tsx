@@ -9,13 +9,13 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Plus, Search, X, ChevronLeft, ChevronRight, MoreHorizontal,
   TrendingUp, TrendingDown, Minus, Check, Trash2,
-  Loader2, ChevronDown
+  Loader2, ChevronDown, Eye
 } from 'lucide-react';
 import { useAuth } from '../AuthWrapper';
 import { db, storage } from '../../firebase';
 import {
   collection, query, onSnapshot, addDoc, serverTimestamp,
-  orderBy, doc, deleteDoc, Timestamp, getDoc, updateDoc, setDoc
+  orderBy, doc, deleteDoc, Timestamp, getDoc, updateDoc, setDoc, where
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { format, startOfMonth, subMonths, addMonths } from 'date-fns';
@@ -524,23 +524,86 @@ function ScanReceiptSheet({
   const handleFile = async (file: File) => {
     setScanning(true);
     setError('');
-    setImageURL(URL.createObjectURL(file));
+    const localURL = URL.createObjectURL(file);
+    setImageURL(localURL);
+
     try {
-      const result = await scanReceipt(file, householdId);
-      setScanned(result);
-      // Load previous prices for each scanned item
-      const history: Record<string, number> = {};
-      await Promise.all(result.lineItems.map(async (item) => {
-        const key = item.name.trim().toLowerCase().replace(/\s+/g, '_');
+      // 1. Upload image to Storage immediately
+      let uploadedImageURL = '';
+      try {
+        const storageRef = ref(storage, `households/${householdId}/receipts/${Date.now()}_${file.name}`);
+        await uploadBytes(storageRef, file);
+        uploadedImageURL = await getDownloadURL(storageRef);
+      } catch {
+        // Storage unavailable (Spark plan) — continue without image
+      }
+
+      // 2. Create Firestore doc with status: 'scanning' — non-blocking checkpoint
+      const scanDocRef = await addDoc(collection(db, `households/${householdId}/expenses`), {
+        status: 'scanning',
+        imageURL: uploadedImageURL || null,
+        paidBy: userId,
+        scannedBy: userId,
+        scannedByName: userDisplayName,
+        scannedByPhoto: userPhotoURL || null,
+        source: 'receipt_scan',
+        createdAt: serverTimestamp(),
+        merchantName: '',
+        total: 0,
+        category: 'other',
+        lineItems: [],
+        budgetMonth: format(new Date(), 'yyyy-MM'),
+        date: new Date(),
+      });
+
+      // 3. Close sheet immediately — user is free to navigate away
+      setScanning(false);
+      onClose();
+
+      // 4. AI scan continues in background (fire-and-forget)
+      (async () => {
         try {
-          const snap = await getDoc(doc(db, `households/${householdId}/priceHistory`, key));
-          if (snap.exists()) history[item.name] = snap.data().price;
-        } catch { /* ignore */ }
-      }));
-      setPriceHistory(history);
+          const result = await scanReceipt(file, householdId);
+          const expenseDate = result.date ? new Date(result.date) : new Date();
+          const finalDate = isNaN(expenseDate.getTime()) ? new Date() : expenseDate;
+          const budgetMonth = format(finalDate, 'yyyy-MM');
+
+          await updateDoc(scanDocRef, {
+            status: 'pending_review',
+            merchantName: result.merchantName,
+            total: result.total,
+            date: finalDate,
+            category: result.lineItems[0]?.category || 'other',
+            lineItems: result.lineItems,
+            budgetMonth,
+            subtotal: result.subtotal || null,
+            tax: result.tax || null,
+          });
+
+          // Write latest price for each line item to priceHistory
+          await Promise.all(result.lineItems.map(async (item) => {
+            const key = item.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
+            try {
+              await setDoc(
+                doc(db, `households/${householdId}/priceHistory`, key),
+                { price: item.price, name: item.name, merchant: result.merchantName, updatedAt: serverTimestamp() },
+                { merge: true }
+              );
+            } catch { /* ignore — non-critical */ }
+          }));
+
+          haptic.success();
+          onSaved();
+        } catch {
+          // Scan failed — mark so user can retry
+          try {
+            await updateDoc(scanDocRef, { status: 'scan_failed' });
+          } catch { /* ignore */ }
+        }
+      })();
+
     } catch (e: any) {
-      setError(e.message || 'Could not read receipt');
-    } finally {
+      setError(e.message || 'Could not start scan');
       setScanning(false);
     }
   };
@@ -550,7 +613,6 @@ function ScanReceiptSheet({
     setSaving(true);
     try {
       const now = new Date();
-      const budgetMonth = format(now, 'yyyy-MM');
 
       // Upload image if available
       let savedImageURL = '';
@@ -569,6 +631,8 @@ function ScanReceiptSheet({
 
       const expenseDate = scanned.date ? new Date(scanned.date) : now;
       const finalDate = isNaN(expenseDate.getTime()) ? now : expenseDate;
+      // Use receipt's actual date for budgetMonth (not today)
+      const budgetMonth = format(finalDate, 'yyyy-MM');
 
       await addDoc(collection(db, `households/${householdId}/expenses`), {
         merchantName: scanned.merchantName,
@@ -834,6 +898,108 @@ function ScanReceiptSheet({
 }
 
 // ============================================================
+// REVIEW PENDING EXPENSE (confirm/edit a scanned receipt)
+// ============================================================
+function ReviewPendingExpense({
+  expense,
+  householdId,
+  onConfirm,
+  onDelete,
+}: {
+  expense: any;
+  householdId: string;
+  onConfirm: () => void;
+  onDelete: () => void;
+}) {
+  const [merchant, setMerchant] = useState(expense.merchantName || '');
+  const [total, setTotal] = useState(String(expense.total || ''));
+  const [category, setCategory] = useState(expense.category || 'other');
+  const [saving, setSaving] = useState(false);
+
+  const handleConfirm = async () => {
+    setSaving(true);
+    try {
+      await updateDoc(doc(db, `households/${householdId}/expenses`, expense.id), {
+        merchantName: merchant.trim() || 'Unknown',
+        total: parseFloat(total) || 0,
+        category,
+        status: null,
+        budgetMonth: format(expense.date instanceof Date ? expense.date : new Date(), 'yyyy-MM'),
+      });
+      // Optionally save merchant to cache
+      try {
+        const { confirmMerchantCategory } = await import('../../lib/merchantCache');
+        await confirmMerchantCategory(householdId, merchant.trim(), category);
+      } catch { /* non-critical */ }
+      onConfirm();
+    } catch {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    await deleteDoc(doc(db, `households/${householdId}/expenses`, expense.id));
+    onDelete();
+  };
+
+  return (
+    <div className="flex-1 overflow-y-auto px-6 pb-8 space-y-4">
+      {expense.imageURL && (
+        <img src={expense.imageURL} className="w-full rounded-2xl max-h-48 object-cover" alt="Receipt" />
+      )}
+      <div>
+        <label className="font-outfit text-[11px] uppercase tracking-wider text-[#6B6560] mb-1.5 block">Merchant</label>
+        <input
+          value={merchant}
+          onChange={e => setMerchant(e.target.value)}
+          className="w-full h-12 px-4 bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl font-outfit text-[15px] text-[#1A1A1A] outline-none focus:border-[#B8955A]"
+          placeholder="Merchant name"
+        />
+      </div>
+      <div className="relative">
+        <span className="absolute left-4 top-1/2 -translate-y-1/2 font-outfit text-[16px] text-[#1A1A1A]">$</span>
+        <input
+          type="number"
+          value={total}
+          onChange={e => setTotal(e.target.value)}
+          className="w-full h-12 pl-8 pr-4 bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl font-outfit text-[16px] text-[#1A1A1A] outline-none focus:border-[#B8955A]"
+          placeholder="0.00"
+        />
+      </div>
+      <div>
+        <label className="font-outfit text-[11px] uppercase tracking-wider text-[#6B6560] mb-1.5 block">Category</label>
+        <select
+          value={category}
+          onChange={e => setCategory(e.target.value)}
+          className="w-full h-12 px-4 bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl font-outfit text-[14px] text-[#1A1A1A] outline-none"
+        >
+          {['groceries','dining','transport','entertainment','health','shopping','utilities','rent','subscription','insurance','education','travel','personal_care','home','other'].map(c => (
+            <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+          ))}
+        </select>
+      </div>
+      <div className="flex gap-3 pt-2">
+        <button
+          onClick={handleDelete}
+          className="h-12 px-5 rounded-full border border-[#D4CEC4] font-outfit text-[13px] text-[#C47B6A] flex items-center gap-2"
+        >
+          <Trash2 size={14} /> Delete
+        </button>
+        <motion.button
+          whileTap={{ scale: 0.97 }}
+          onClick={handleConfirm}
+          disabled={saving}
+          className="flex-1 h-12 rounded-full bg-[#1A1A1A] text-white font-outfit font-semibold text-[14px] flex items-center justify-center gap-2"
+        >
+          {saving ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />}
+          {saving ? 'Saving…' : 'Confirm & Save'}
+        </motion.button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
 // MAIN FINANCES TAB
 // ============================================================
 export default function FinancesTab() {
@@ -857,6 +1023,9 @@ export default function FinancesTab() {
   const [monthlyIncomeOverride, setMonthlyIncomeOverride] = useState(0);
   const [partnerData, setPartnerData] = useState<any>(null);
   const [savingsGoals, setSavingsGoals] = useState<any[]>([]);
+  // Pending receipt scans (status: 'scanning' | 'pending_review' | 'scan_failed')
+  const [pendingScans, setPendingScans] = useState<any[]>([]);
+  const [reviewingExpense, setReviewingExpense] = useState<any | null>(null);
   // Manual expense form
   const [manualMerchant, setManualMerchant] = useState('');
   const [manualAmount, setManualAmount] = useState('');
@@ -874,26 +1043,47 @@ export default function FinancesTab() {
     const unsubExpenses = onSnapshot(
       query(collection(db, `households/${householdId}/expenses`), orderBy('date', 'desc')),
       snap => {
-        const data = snap.docs.map(d => {
+        const data: Expense[] = [];
+        const pending: any[] = [];
+
+        snap.docs.forEach(d => {
           const raw = d.data();
-          return {
-            id: d.id,
-            merchantName: raw.merchantName || 'Unknown',
-            total: raw.total || 0,
-            date: raw.date instanceof Timestamp ? raw.date.toDate() : new Date(raw.date),
-            category: raw.category || 'other',
-            lineItems: raw.lineItems || [],
-            paidBy: raw.paidBy || '',
-            source: raw.source || 'manual',
-            imageURL: raw.imageURL || null,
-            notes: raw.notes || '',
-            budgetMonth: raw.budgetMonth || format(new Date(), 'yyyy-MM'),
-            scannedBy: raw.scannedBy || null,
-            scannedByName: raw.scannedByName || null,
-            scannedByPhoto: raw.scannedByPhoto || null,
-          } as Expense;
+          const status = raw.status;
+          // Separate pending/scanning docs from confirmed expenses
+          if (status === 'scanning' || status === 'pending_review' || status === 'scan_failed') {
+            pending.push({
+              id: d.id,
+              status,
+              merchantName: raw.merchantName || '',
+              total: raw.total || 0,
+              date: raw.date instanceof Timestamp ? raw.date.toDate() : new Date(),
+              category: raw.category || 'other',
+              lineItems: raw.lineItems || [],
+              imageURL: raw.imageURL || null,
+              scannedByName: raw.scannedByName || null,
+            });
+          } else {
+            data.push({
+              id: d.id,
+              merchantName: raw.merchantName || 'Unknown',
+              total: raw.total || 0,
+              date: raw.date instanceof Timestamp ? raw.date.toDate() : new Date(raw.date),
+              category: raw.category || 'other',
+              lineItems: raw.lineItems || [],
+              paidBy: raw.paidBy || '',
+              source: raw.source || 'manual',
+              imageURL: raw.imageURL || null,
+              notes: raw.notes || '',
+              budgetMonth: raw.budgetMonth || format(new Date(), 'yyyy-MM'),
+              scannedBy: raw.scannedBy || null,
+              scannedByName: raw.scannedByName || null,
+              scannedByPhoto: raw.scannedByPhoto || null,
+            });
+          }
         });
+
         setExpenses(data);
+        setPendingScans(pending);
         setLoading(false);
       }
     );
@@ -1211,6 +1401,30 @@ export default function FinancesTab() {
           ))}
         </div>
       </div>
+
+      {/* Pending scans banner — shown in Overview tab */}
+      {activeTab === 'overview' && pendingScans.length > 0 && (
+        <div className="px-5 mb-3">
+          <motion.button
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            whileTap={{ scale: 0.98 }}
+            onClick={() => setActiveTab('explorer')}
+            className="w-full flex items-center gap-3 bg-[#FFF8F0] border border-[#B8955A]/40 rounded-[18px] px-4 py-3"
+          >
+            <Eye size={16} className="text-[#B8955A] flex-shrink-0" />
+            <p className="font-outfit text-[13px] text-[#B8955A] font-medium flex-1 text-left">
+              {pendingScans.filter(s => s.status === 'scanning').length > 0
+                ? `Scanning ${pendingScans.filter(s => s.status === 'scanning').length} receipt${pendingScans.filter(s => s.status === 'scanning').length > 1 ? 's' : ''}…`
+                : `${pendingScans.length} receipt${pendingScans.length > 1 ? 's' : ''} need${pendingScans.length === 1 ? 's' : ''} review`
+              }
+            </p>
+            <span className="font-outfit text-[12px] text-[#B8955A] bg-[#B8955A]/15 px-2 py-0.5 rounded-full">
+              View
+            </span>
+          </motion.button>
+        </div>
+      )}
 
       <AnimatePresence mode="wait">
 
@@ -1565,6 +1779,71 @@ export default function FinancesTab() {
         {activeTab === 'explorer' && (
           <motion.div key="explorer" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}>
 
+            {/* Pending review section */}
+            {pendingScans.length > 0 && (
+              <div className="px-5 mb-4">
+                <p className="font-outfit text-[11px] uppercase tracking-[2.5px] text-[#B8955A] mb-3">
+                  Needs Review ({pendingScans.length})
+                </p>
+                <div className="space-y-2">
+                  {pendingScans.map(scan => (
+                    <motion.div
+                      key={scan.id}
+                      layout
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => scan.status === 'pending_review' && setReviewingExpense(scan)}
+                      className={`flex items-center gap-3 p-3.5 rounded-2xl border ${
+                        scan.status === 'scanning'
+                          ? 'bg-[#FFF8F0] border-[#B8955A]/30'
+                          : scan.status === 'scan_failed'
+                          ? 'bg-[#FDF0EE] border-[#C47B6A]/30'
+                          : 'bg-[#F0F7F0] border-[#4CAF50]/30 cursor-pointer'
+                      }`}
+                    >
+                      {scan.imageURL ? (
+                        <img src={scan.imageURL} className="w-10 h-10 rounded-xl object-cover flex-shrink-0" alt="Receipt" />
+                      ) : (
+                        <div className="w-10 h-10 rounded-xl bg-[#EDE8DF] flex items-center justify-center flex-shrink-0 text-[18px]">
+                          🧾
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className="font-outfit text-[13px] font-semibold text-[#1A1A1A] truncate">
+                          {scan.status === 'scanning'
+                            ? 'Scanning…'
+                            : scan.status === 'scan_failed'
+                            ? 'Scan failed'
+                            : scan.merchantName || 'Unknown merchant'
+                          }
+                        </p>
+                        <p className="font-outfit text-[11px] text-[#6B6560]">
+                          {scan.status === 'scanning' && (
+                            <span className="flex items-center gap-1">
+                              <Loader2 size={10} className="animate-spin" />
+                              AI is reading this receipt…
+                            </span>
+                          )}
+                          {scan.status === 'pending_review' && `${formatAUD(scan.total)} · Tap to review`}
+                          {scan.status === 'scan_failed' && 'Could not read receipt'}
+                        </p>
+                      </div>
+                      {scan.status === 'pending_review' && (
+                        <Eye size={16} className="text-[#4CAF50] flex-shrink-0" />
+                      )}
+                      {scan.status === 'scan_failed' && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); deleteDoc(doc(db, `households/${householdId}/expenses`, scan.id)); }}
+                          className="w-7 h-7 rounded-full bg-[#FDF0EE] flex items-center justify-center flex-shrink-0"
+                        >
+                          <Trash2 size={13} className="text-[#C47B6A]" />
+                        </button>
+                      )}
+                    </motion.div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Search */}
             <div className="px-5 mb-4">
               <div className="flex items-center gap-3 bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl px-4 h-12">
@@ -1913,6 +2192,41 @@ export default function FinancesTab() {
             userDisplayName={userData?.displayName || user.displayName || 'You'}
             userPhotoURL={userData?.photoURL || user.photoURL || undefined}
           />
+        )}
+      </AnimatePresence>
+
+      {/* Pending review sheet */}
+      <AnimatePresence>
+        {reviewingExpense && householdId && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[9999] bg-[#1A1A1A]/60 backdrop-blur-sm flex items-end"
+            onClick={() => setReviewingExpense(null)}
+          >
+            <motion.div
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={SPRING_DEFAULT}
+              className="bg-[#fcf9f4] rounded-t-[28px] w-full max-h-[88dvh] flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="px-6 pt-5 pb-4 flex items-center justify-between flex-shrink-0">
+                <h2 className="font-serif text-[20px] text-[#1A1A1A]">Review Receipt</h2>
+                <button onClick={() => setReviewingExpense(null)} className="w-10 h-10 rounded-full bg-[#EDE8DF] flex items-center justify-center">
+                  <X size={18} />
+                </button>
+              </div>
+              <ReviewPendingExpense
+                expense={reviewingExpense}
+                householdId={householdId}
+                onConfirm={() => { setReviewingExpense(null); }}
+                onDelete={() => { setReviewingExpense(null); }}
+              />
+            </motion.div>
+          </motion.div>
         )}
       </AnimatePresence>
 
