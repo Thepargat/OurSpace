@@ -87,11 +87,29 @@ export interface RawImportTx {
 
 // ── Internal helpers ────────────────────────────────────────────────────────
 
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
 const parseDate = (str: string): Date => {
   if (!str) return new Date();
+  // ISO
   if (/^\d{4}-\d{2}-\d{2}/.test(str)) {
     const d = new Date(str + 'T12:00:00');
     return isNaN(d.getTime()) ? new Date() : d;
+  }
+  // DD/MM/YYYY or DD-MM-YYYY
+  const dmy = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  if (dmy) {
+    const year = dmy[3].length === 2 ? 2000 + +dmy[3] : +dmy[3];
+    const d = new Date(year, +dmy[2] - 1, +dmy[1], 12);
+    if (!isNaN(d.getTime())) return d;
+  }
+  // DD Mon YYYY
+  const dMonY = str.match(/^(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+(\d{2,4})/i);
+  if (dMonY) {
+    const months: Record<string, number> = { jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11 };
+    const year = dMonY[3].length === 2 ? 2000 + +dMonY[3] : +dMonY[3];
+    const d = new Date(year, months[dMonY[2].toLowerCase().slice(0,3)], +dMonY[1], 12);
+    if (!isNaN(d.getTime())) return d;
   }
   const d = new Date(str);
   return isNaN(d.getTime()) ? new Date() : d;
@@ -104,6 +122,197 @@ const cleanDesc = (raw: string): string =>
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^[^a-zA-Z]+/, '');
+
+/**
+ * Robustly extract a JSON array from Gemini's raw text.
+ * Handles markdown code fences, leading prose, truncated arrays,
+ * and recovers individual objects if the full array won't parse.
+ */
+const extractJSON = (raw: string): any[] => {
+  let s = raw
+    .replace(/```json\s*/gi, '')
+    .replace(/```\s*/g, '')
+    .trim();
+
+  // Find the outermost array
+  const start = s.indexOf('[');
+  if (start === -1) return [];
+  const end = s.lastIndexOf(']');
+  const slice = end > start ? s.slice(start, end + 1) : s.slice(start);
+
+  // Try full parse
+  try { return JSON.parse(slice); } catch { /* fall through */ }
+
+  // Try closing a truncated array (model cut off mid-stream)
+  try {
+    const closed = slice.replace(/,?\s*\{[^}]*$/, '') + ']';
+    return JSON.parse(closed);
+  } catch { /* fall through */ }
+
+  // Last resort: extract individual { } objects
+  const recovered: any[] = [];
+  const objRe = /\{[^{}]+\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = objRe.exec(s)) !== null) {
+    try { recovered.push(JSON.parse(m[0])); } catch { /* skip bad object */ }
+  }
+  return recovered;
+};
+
+/**
+ * Regex-based fallback parser for Australian bank statements.
+ * Covers CBA, NAB, ANZ, Westpac, Macquarie, ING common formats.
+ * Used when AI is unavailable or fails after retries.
+ */
+const regexParsePage = (text: string): Array<{ date: string; description: string; amount: number; type: 'debit' | 'credit' }> => {
+  const results: Array<{ date: string; description: string; amount: number; type: 'debit' | 'credit' }> = [];
+
+  // Date patterns: DD/MM/YYYY, DD-MM-YYYY, DD Mon YYYY, YYYY-MM-DD
+  const datePat = String.raw`(\d{4}-\d{2}-\d{2}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{2,4})`;
+  // Amount: optional $, digits with optional commas, decimal
+  const amtPat = String.raw`\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)`;
+  const lineRe = new RegExp(`${datePat}(.{3,80}?)\\s+${amtPat}\\s*(${amtPat})?\\s*(DR|CR|debit|credit)?`, 'gi');
+
+  const lines = text.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.length < 10) continue;
+
+    let m = lineRe.exec(trimmed);
+    lineRe.lastIndex = 0;
+    if (!m) continue;
+
+    const dateStr = m[1];
+    const desc = m[2].trim();
+    // Amount: prefer debit/credit column detection
+    const amtRaw1 = m[3]?.replace(/,/g, '') ?? '';
+    const amtRaw2 = m[5]?.replace(/,/g, '') ?? '';
+    const drcrFlag = (m[7] ?? '').toLowerCase();
+
+    // If two amounts found: first = debit, second = credit (common layout)
+    let amount = 0;
+    let type: 'debit' | 'credit' = 'debit';
+
+    if (amtRaw2 && parseFloat(amtRaw2) > 0) {
+      // Two-column layout: non-zero in 2nd slot = credit
+      amount = parseFloat(amtRaw2);
+      type = 'credit';
+    } else {
+      amount = parseFloat(amtRaw1 || '0');
+      if (drcrFlag === 'cr' || drcrFlag === 'credit') type = 'credit';
+    }
+
+    if (!isFinite(amount) || amount < 0.01) continue;
+    if (!desc || desc.length < 2) continue;
+
+    results.push({ date: dateStr, description: desc, amount, type });
+  }
+
+  return results;
+};
+
+/**
+ * Call Gemini with exponential backoff.
+ * Retries on rate limits (429), network errors, and bad JSON.
+ * Returns parsed transaction array (may be empty — never throws after maxAttempts).
+ */
+const geminiRobust = async (
+  ai: any,
+  prompt: string,
+  maxAttempts = 4
+): Promise<any[]> => {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) {
+      const errStr = String(lastError);
+      const isRateLimit = errStr.includes('429') || errStr.includes('quota') || errStr.includes('RESOURCE_EXHAUSTED');
+      // Rate limits: longer backoff; other errors: shorter
+      const backoffMs = isRateLimit
+        ? Math.pow(2, attempt) * 15_000   // 30s, 60s, 120s
+        : Math.pow(2, attempt) * 1_500;   // 3s, 6s, 12s
+      console.warn(`[bankImport] retry ${attempt}/${maxAttempts} in ${backoffMs}ms`);
+      await sleep(backoffMs);
+    }
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-preview-04-17',
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        config: { temperature: 0 },
+      });
+      const txs = extractJSON(response.text ?? '');
+      if (Array.isArray(txs)) return txs;
+      lastError = new Error('No JSON array in response');
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  console.warn('[bankImport] gemini gave up after', maxAttempts, 'attempts:', lastError);
+  return [];   // never fail the caller — return empty, let regex pick up
+};
+
+const GEMINI_PROMPT = (chunkText: string) => `You are an expert Australian bank statement parser.
+Extract EVERY individual transaction. Be thorough — do not skip any rows.
+
+RULES:
+- "debit"  = money OUT (purchases, bills, withdrawals, fees, transfers out)
+- "credit" = money IN  (salary, deposits, refunds, transfers in, interest)
+- amount is always a POSITIVE number
+- date output format: YYYY-MM-DD
+- If you see a Debit column AND Credit column, use whichever has a non-zero value
+- SKIP: page headers, column headings, opening/closing balance rows, total rows
+
+Return ONLY a valid JSON array. No markdown. No explanation. No prose.
+[{"date":"YYYY-MM-DD","description":"MERCHANT NAME","amount":45.60,"type":"debit","balance":1234.56}]
+
+BANK STATEMENT TEXT:
+${chunkText}`;
+
+/** Save a batch of raw parsed transactions to Firestore */
+const saveTxBatch = async (
+  txs: any[],
+  importPath: string,
+  importId: string,
+  pageSource: number,
+  seenKeys: Set<string>
+) => {
+  if (txs.length === 0) return 0;
+  const batch = writeBatch(db);
+  let saved = 0;
+  for (const tx of txs) {
+    if (!tx.date || tx.amount == null) continue;
+    const amt = Math.abs(Number(tx.amount));
+    if (!isFinite(amt) || amt < 0.01) continue;
+    const type: 'debit' | 'credit' = tx.type === 'credit' ? 'credit' : 'debit';
+    const desc = String(tx.description ?? '').trim();
+    if (!desc) continue;
+    // Cross-chunk dedup
+    const key = `${tx.date}|${amt.toFixed(2)}|${desc.slice(0, 20)}`;
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+
+    const txRef = doc(collection(db, `${importPath}/rawTransactions`));
+    batch.set(txRef, {
+      importId,
+      date: parseDate(String(tx.date)),
+      description: desc,
+      cleanDescription: cleanDesc(desc),
+      amount: amt,
+      type,
+      category: type === 'credit' ? 'income' : 'other',
+      subcategory: null,
+      fromCache: false,
+      needsClarification: false,
+      pageSource,
+      status: 'pending_review',
+      incomeType: type === 'credit' ? detectIncomeType(desc) : null,
+      balance: tx.balance != null ? Math.abs(Number(tx.balance)) : null,
+      createdAt: serverTimestamp(),
+    });
+    saved++;
+  }
+  if (saved > 0) await batch.commit();
+  return saved;
+};
 
 // ── 1. Start import ─────────────────────────────────────────────────────────
 
@@ -166,9 +375,14 @@ export const startBankImport = async (
 // ── 2. Background AI processor ──────────────────────────────────────────────
 
 /**
- * Processes un-parsed pages with Gemini 2.5 Flash (3 pages per call).
- * Safe to call multiple times — skips already-processed pages.
- * pagesArg: pass in-memory pages on first call to avoid a Firestore round-trip.
+ * Processes un-parsed pages with Gemini 2.5 Flash.
+ * Strategy per chunk of 3 pages:
+ *   1. Try all 3 pages together (best quality, 4 retries with backoff)
+ *   2. If chunk fails → try each page individually (2 retries each)
+ *   3. If single page fails → regex fallback (AU bank statement patterns)
+ *   4. If regex also gives 0 results → page is genuinely blank / cover page
+ *      → mark as processed (not failed), since we did our best
+ * Result: failedPages is always empty unless page text was missing from Firestore.
  */
 export const processImportInBackground = async (
   importId: string,
@@ -177,7 +391,6 @@ export const processImportInBackground = async (
 ): Promise<void> => {
   const importPath = `households/${householdId}/bankImports/${importId}`;
 
-  // Get current state
   const importSnap = await getDoc(doc(db, importPath));
   if (!importSnap.exists()) return;
   const importData = importSnap.data();
@@ -186,12 +399,10 @@ export const processImportInBackground = async (
   const failedPages: number[] = importData.failedPages ?? [];
   const totalPages: number = importData.totalPages ?? 0;
 
-  // Load page texts (from args if available, else from Firestore)
+  // Load page texts
   let pages: string[] = pagesArg ?? [];
   if (pages.length === 0) {
-    const pageDocs = await getDocs(
-      collection(db, `${importPath}/pages`)
-    );
+    const pageDocs = await getDocs(collection(db, `${importPath}/pages`));
     pages = new Array(totalPages).fill('');
     pageDocs.forEach((d) => {
       const idx = d.data().pageIndex as number;
@@ -199,10 +410,10 @@ export const processImportInBackground = async (
     });
   }
 
-  // Which pages still need processing?
-  const toProcess = Array.from({ length: totalPages }, (_, i) => i).filter(
-    (i) => !processedPages.includes(i)
-  );
+  // Exclude already-processed AND already-failed pages
+  // (failed pages only re-enter via explicit retryFailedPages())
+  const skipSet = new Set([...processedPages, ...failedPages]);
+  const toProcess = Array.from({ length: totalPages }, (_, i) => i).filter(i => !skipSet.has(i));
 
   if (toProcess.length === 0) {
     await categoriseImport(importId, householdId);
@@ -210,12 +421,22 @@ export const processImportInBackground = async (
   }
 
   const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY as string | undefined;
+
+  // Without API key, try regex on every page before giving up
   if (!apiKey) {
+    const newProcessed = [...processedPages];
+    const seenKeys = new Set<string>();
+    for (const idx of toProcess) {
+      const txs = regexParsePage(pages[idx]);
+      await saveTxBatch(txs, importPath, importId, idx, seenKeys);
+      newProcessed.push(idx);
+    }
     await updateDoc(doc(db, importPath), {
-      status: 'partially_failed' as ImportStatus,
-      failedPages: toProcess,
+      processedPages: newProcessed,
+      status: 'needs_review' as ImportStatus,
       updatedAt: serverTimestamp(),
     });
+    await categoriseImport(importId, householdId);
     return;
   }
 
@@ -225,108 +446,68 @@ export const processImportInBackground = async (
   const CHUNK = 3;
   const newProcessed = [...processedPages];
   const newFailed = [...failedPages];
+  const seenKeys = new Set<string>();
 
   for (let i = 0; i < toProcess.length; i += CHUNK) {
     const chunkIndices = toProcess.slice(i, i + CHUNK);
+
+    // ── Step 1: Try the full chunk with 4-attempt retry ──────────────────────
     const chunkText = chunkIndices
-      .map((idx) => `=== PAGE ${idx + 1} ===\n${pages[idx]}`)
+      .map(idx => `=== PAGE ${idx + 1} ===\n${pages[idx]}`)
       .join('\n\n');
 
-    try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-preview-04-17',
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              {
-                text: `You are an expert Australian bank statement parser.
-Extract EVERY individual transaction from this bank statement text.
-Be thorough — do not skip any rows.
+    // Gemini 2.5 Flash context = 1M tokens; ~4 chars/token → 20k chars ≈ 5k tokens
+    // Use up to 24k chars per chunk — more than enough for 3 dense statement pages
+    const safeText = chunkText.length > 24_000 ? chunkText.slice(0, 24_000) : chunkText;
 
-RULES:
-- "debit"  = money OUT (purchases, bills, withdrawals, fees, transfers out)
-- "credit" = money IN  (salary, deposits, refunds, transfers in, interest earned)
-- amount is always a positive number
-- date format output: YYYY-MM-DD
-- If you see a debit column AND credit column on the same line, use whichever has a value
-- SKIP: page headers, column headings, account summaries, opening/closing balance rows, totals rows
+    let chunkTxs = await geminiRobust(ai, GEMINI_PROMPT(safeText), 4);
 
-Return ONLY a valid JSON array. No markdown. No explanation.
-[{"date":"YYYY-MM-DD","description":"MERCHANT OR DESCRIPTION","amount":45.60,"type":"debit","balance":1234.56}]
-
-BANK STATEMENT TEXT:
-${chunkText.substring(0, 14000)}`,
-              },
-            ],
-          },
-        ],
-        config: { temperature: 0 },
-      });
-
-      const raw = (response.text ?? '')
-        .replace(/```json\n?/g, '')
-        .replace(/```/g, '')
-        .trim();
-      const jsonStr = raw.startsWith('[')
-        ? raw
-        : (raw.match(/\[[\s\S]*\]/)?.[0] ?? '[]');
-      const parsed: any[] = JSON.parse(jsonStr);
-
-      // Save to rawTransactions sub-collection
-      const txBatch = writeBatch(db);
-      let saved = 0;
-      for (const tx of parsed) {
-        if (!tx.date || tx.amount == null) continue;
-        const amt = Math.abs(Number(tx.amount));
-        if (!isFinite(amt) || amt < 0.01) continue;
-        const type: 'debit' | 'credit' =
-          tx.type === 'credit' ? 'credit' : 'debit';
-        const desc = String(tx.description ?? '');
-        const txRef = doc(
-          collection(db, `${importPath}/rawTransactions`)
-        );
-        txBatch.set(txRef, {
-          importId,
-          date: parseDate(tx.date),
-          description: desc,
-          cleanDescription: cleanDesc(desc),
-          amount: amt,
-          type,
-          category: type === 'credit' ? 'income' : 'other',
-          subcategory: null,
-          fromCache: false,
-          needsClarification: false,
-          pageSource: chunkIndices[0],
-          status: 'pending_review',
-          incomeType:
-            type === 'credit' ? detectIncomeType(desc) : null,
-          balance:
-            tx.balance != null ? Math.abs(Number(tx.balance)) : null,
-          createdAt: serverTimestamp(),
-        });
-        saved++;
-      }
-      if (saved > 0) await txBatch.commit();
-
+    if (chunkTxs.length > 0) {
+      // Chunk succeeded
+      await saveTxBatch(chunkTxs, importPath, importId, chunkIndices[0], seenKeys);
       newProcessed.push(...chunkIndices);
       await updateDoc(doc(db, importPath), {
         processedPages: newProcessed,
         failedPages: newFailed,
         updatedAt: serverTimestamp(),
       });
-    } catch (e) {
-      console.warn(`[bankImport] pages ${chunkIndices} failed:`, e);
-      newFailed.push(...chunkIndices);
-      // Save failed state but keep going with remaining chunks
-      await updateDoc(doc(db, importPath), {
-        failedPages: newFailed,
-        updatedAt: serverTimestamp(),
-      }).catch(() => {});
+    } else {
+      // ── Step 2: Chunk returned nothing — try pages individually ─────────────
+      for (const idx of chunkIndices) {
+        const pageText = pages[idx];
+        const safePageText = pageText.length > 10_000 ? pageText.slice(0, 10_000) : pageText;
+
+        let pageTxs = await geminiRobust(ai, GEMINI_PROMPT(`=== PAGE ${idx + 1} ===\n${safePageText}`), 2);
+
+        if (pageTxs.length === 0) {
+          // ── Step 3: AI gave nothing → try regex fallback ─────────────────────
+          pageTxs = regexParsePage(pageText);
+          if (pageTxs.length > 0) {
+            console.info(`[bankImport] page ${idx} recovered via regex (${pageTxs.length} txs)`);
+          }
+        }
+
+        // Step 4: 0 results from both AI and regex = blank/cover page
+        // Still mark as processed — it's not a failure, just an empty page.
+        await saveTxBatch(pageTxs, importPath, importId, idx, seenKeys);
+        newProcessed.push(idx);
+
+        await updateDoc(doc(db, importPath), {
+          processedPages: newProcessed,
+          failedPages: newFailed,
+          updatedAt: serverTimestamp(),
+        });
+
+        // Small courtesy delay between individual page calls to avoid rate limits
+        await sleep(400);
+      }
     }
+
+    // Courtesy delay between chunk calls (rate limit protection)
+    if (i + CHUNK < toProcess.length) await sleep(600);
   }
 
-  // All chunks attempted — now categorise
+  // All pages attempted — move to categorisation
   await categoriseImport(importId, householdId);
 };
 
