@@ -839,19 +839,33 @@ function ScanReceiptSheet({
 export default function FinancesTab() {
   const { user, householdId, userData } = useAuth();
   const [activeTab, setActiveTab] = useState<'overview' | 'explorer' | 'analytics'>('overview');
+  const [viewMode, setViewMode] = useState<'month' | 'year'>('month');
   const [viewMonth, setViewMonth] = useState(new Date());
+  const [viewYear, setViewYear] = useState(new Date().getFullYear());
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [bankTransactions, setBankTransactions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showScanSheet, setShowScanSheet] = useState(false);
   const [showBankImport, setShowBankImport] = useState(false);
+  const [showManualSheet, setShowManualSheet] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
+  const [showAddGoalSheet, setShowAddGoalSheet] = useState(false);
   const [drillDownCat, setDrillDownCat] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [monthlyBudget, setMonthlyBudget] = useState(3000);
+  const [monthlyBudget, setMonthlyBudget] = useState(0);
+  const [monthlyIncomeOverride, setMonthlyIncomeOverride] = useState(0);
   const [partnerData, setPartnerData] = useState<any>(null);
   const [savingsGoals, setSavingsGoals] = useState<any[]>([]);
+  // Manual expense form
+  const [manualMerchant, setManualMerchant] = useState('');
+  const [manualAmount, setManualAmount] = useState('');
+  const [manualCategory, setManualCategory] = useState('other');
+  const [manualDate, setManualDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  // Add goal form
+  const [goalName, setGoalName] = useState('');
+  const [goalTarget, setGoalTarget] = useState('');
+  const [goalDeadline, setGoalDeadline] = useState('');
 
   // ---- Data listeners ----
   useEffect(() => {
@@ -899,21 +913,30 @@ export default function FinancesTab() {
     return () => { unsubExpenses(); unsubBank(); unsubGoals(); };
   }, [householdId]);
 
-  // Load monthly budget from Firestore (set in Settings)
+  // Load budget + income from household (set in Settings)
   useEffect(() => {
     if (!householdId) return;
-    const unsubBudget = onSnapshot(doc(db, 'households', householdId), (snap) => {
+    const unsub = onSnapshot(doc(db, 'households', householdId), (snap) => {
       const data = snap.data();
       const limit = data?.budgetSettings?.monthlyLimit;
-      if (limit && typeof limit === 'number' && limit > 0) {
-        setMonthlyBudget(limit);
-      }
+      if (limit && typeof limit === 'number' && limit > 0) setMonthlyBudget(limit);
+      const income = data?.budgetSettings?.monthlyIncome;
+      if (income && typeof income === 'number' && income > 0) setMonthlyIncomeOverride(income);
     });
-    return () => unsubBudget();
+    return () => unsub();
   }, [householdId]);
 
   // ---- Derived data ----
   const monthKey = format(viewMonth, 'yyyy-MM');
+
+  // Days elapsed in the viewed month (accurate for past months too)
+  const daysElapsed = useMemo(() => {
+    const now = new Date();
+    const isCurrentMonth = format(viewMonth, 'yyyy-MM') === format(now, 'yyyy-MM');
+    return isCurrentMonth
+      ? Math.max(now.getDate(), 1)
+      : new Date(viewMonth.getFullYear(), viewMonth.getMonth() + 1, 0).getDate();
+  }, [viewMonth]);
 
   const monthExpenses = useMemo(() =>
     expenses.filter(e => e.budgetMonth === monthKey),
@@ -925,13 +948,36 @@ export default function FinancesTab() {
     [monthExpenses]
   );
 
+  // Income: bank transactions first, fall back to household recurring income setting
   const monthIncome = useMemo(() => {
-    const incomes = bankTransactions.filter(t => {
-      const tDate = t.date instanceof Timestamp ? t.date.toDate() : new Date(t.date);
-      return format(tDate, 'yyyy-MM') === monthKey && t.type === 'credit' && t.incomeType !== 'transfer';
+    const bankIncome = bankTransactions
+      .filter(t => {
+        const tDate = t.date instanceof Timestamp ? t.date.toDate() : new Date(t.date);
+        return format(tDate, 'yyyy-MM') === monthKey && t.type === 'credit' && t.incomeType !== 'transfer';
+      })
+      .reduce((s: number, t: any) => s + Math.abs(t.amount || 0), 0);
+    return bankIncome > 0 ? bankIncome : monthlyIncomeOverride;
+  }, [bankTransactions, monthKey, monthlyIncomeOverride]);
+
+  // Year-level aggregates for year view
+  const yearExpenses = useMemo(() =>
+    expenses.filter(e => e.budgetMonth?.startsWith(String(viewYear))),
+    [expenses, viewYear]
+  );
+
+  const yearTotalSpent = useMemo(() =>
+    yearExpenses.reduce((s, e) => s + e.total, 0),
+    [yearExpenses]
+  );
+
+  const yearMonthlyTotals = useMemo(() => {
+    const months = Array.from({ length: 12 }, (_, i) => {
+      const key = `${viewYear}-${String(i + 1).padStart(2, '0')}`;
+      const total = expenses.filter(e => e.budgetMonth === key).reduce((s, e) => s + e.total, 0);
+      return { month: i, label: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][i], total };
     });
-    return incomes.reduce((s: number, t: any) => s + Math.abs(t.amount || 0), 0);
-  }, [bankTransactions, monthKey]);
+    return months;
+  }, [expenses, viewYear]);
 
   const categoryTotals = useMemo(() => {
     const map: Record<string, number> = {};
@@ -1084,6 +1130,18 @@ export default function FinancesTab() {
         <div className="flex items-center justify-between">
           <h1 className="font-serif text-[32px] font-light text-[#1A1A1A]">Finances</h1>
           <div className="flex items-center gap-2">
+            {/* Month / Year toggle */}
+            <div className="flex bg-[#EDE8DF] rounded-full p-0.5 border border-[#D4CEC4]">
+              {(['month', 'year'] as const).map(mode => (
+                <motion.button
+                  key={mode}
+                  onClick={() => setViewMode(mode)}
+                  className={`px-3 py-1 rounded-full font-outfit text-[12px] font-medium transition-colors ${viewMode === mode ? 'bg-[#1A1A1A] text-white' : 'text-[#6B6560]'}`}
+                >
+                  {mode === 'month' ? 'Month' : 'Year'}
+                </motion.button>
+              ))}
+            </div>
             <motion.button
               whileTap={{ scale: 0.92 }}
               onClick={() => setShowMenu(true)}
@@ -1094,22 +1152,40 @@ export default function FinancesTab() {
           </div>
         </div>
 
-        {/* Month nav */}
-        <div className="flex items-center gap-4 mt-2">
-          <motion.button whileTap={{ scale: 0.9 }} onClick={() => setViewMonth(m => subMonths(m, 1))}>
-            <ChevronLeft size={20} className="text-[#6B6560]" />
-          </motion.button>
-          <span className="font-outfit text-[14px] text-[#1A1A1A] font-medium">
-            {format(viewMonth, 'MMMM yyyy')}
-          </span>
-          <motion.button
-            whileTap={{ scale: 0.9 }}
-            onClick={() => setViewMonth(m => addMonths(m, 1))}
-            disabled={viewMonth >= new Date()}
-          >
-            <ChevronRight size={20} className={viewMonth >= new Date() ? 'text-[#D4CEC4]' : 'text-[#6B6560]'} />
-          </motion.button>
-        </div>
+        {/* Period nav */}
+        {viewMode === 'month' ? (
+          <div className="flex items-center gap-4 mt-2">
+            <motion.button whileTap={{ scale: 0.9 }} onClick={() => setViewMonth(m => subMonths(m, 1))}>
+              <ChevronLeft size={20} className="text-[#6B6560]" />
+            </motion.button>
+            <span className="font-outfit text-[14px] text-[#1A1A1A] font-medium flex-1 text-center">
+              {format(viewMonth, 'MMMM yyyy')}
+            </span>
+            <motion.button
+              whileTap={{ scale: 0.9 }}
+              onClick={() => setViewMonth(m => addMonths(m, 1))}
+              disabled={format(viewMonth, 'yyyy-MM') >= format(new Date(), 'yyyy-MM')}
+            >
+              <ChevronRight size={20} className={format(viewMonth, 'yyyy-MM') >= format(new Date(), 'yyyy-MM') ? 'text-[#D4CEC4]' : 'text-[#6B6560]'} />
+            </motion.button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-4 mt-2">
+            <motion.button whileTap={{ scale: 0.9 }} onClick={() => setViewYear(y => y - 1)}>
+              <ChevronLeft size={20} className="text-[#6B6560]" />
+            </motion.button>
+            <span className="font-outfit text-[14px] text-[#1A1A1A] font-medium flex-1 text-center">
+              {viewYear}
+            </span>
+            <motion.button
+              whileTap={{ scale: 0.9 }}
+              onClick={() => setViewYear(y => y + 1)}
+              disabled={viewYear >= new Date().getFullYear()}
+            >
+              <ChevronRight size={20} className={viewYear >= new Date().getFullYear() ? 'text-[#D4CEC4]' : 'text-[#6B6560]'} />
+            </motion.button>
+          </div>
+        )}
       </div>
 
       {/* Tabs */}
@@ -1139,7 +1215,84 @@ export default function FinancesTab() {
       <AnimatePresence mode="wait">
 
         {/* ============ TAB 1: OVERVIEW ============ */}
-        {activeTab === 'overview' && (
+        {activeTab === 'overview' && viewMode === 'year' && (
+          <motion.div key="year-overview" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}>
+            {/* Year hero */}
+            <div className="px-5 mb-4">
+              <div className="bg-[#1A1A1A] rounded-[28px] p-6 relative overflow-hidden">
+                <div className="absolute inset-0 opacity-10 pointer-events-none">
+                  <div className="absolute top-0 right-0 w-48 h-48 rounded-full bg-[#B8955A] blur-3xl" />
+                </div>
+                <div className="relative z-10">
+                  <p className="font-outfit text-[11px] uppercase tracking-[2.5px] text-[#B8955A] mb-1">{viewYear} · Total Spend</p>
+                  <p className="font-serif text-[48px] font-light text-white leading-none tracking-[-2px]">{formatAUD(yearTotalSpent)}</p>
+                  <p className="font-outfit text-[13px] text-white/40 mt-1">{yearExpenses.length} receipts · avg {formatAUD(yearTotalSpent / 12)}/month</p>
+                  {monthlyIncomeOverride > 0 && (
+                    <div className="mt-4 pt-3 border-t border-white/10 grid grid-cols-3 gap-3">
+                      <div>
+                        <p className="font-outfit text-[10px] text-white/40 uppercase tracking-wider">Income</p>
+                        <p className="font-serif text-[15px] text-[#7FAF7B]">{formatAUD(monthlyIncomeOverride * 12)}</p>
+                      </div>
+                      <div>
+                        <p className="font-outfit text-[10px] text-white/40 uppercase tracking-wider">Spent</p>
+                        <p className="font-serif text-[15px] text-white">{formatAUD(yearTotalSpent)}</p>
+                      </div>
+                      <div>
+                        <p className="font-outfit text-[10px] text-white/40 uppercase tracking-wider">Saved</p>
+                        <p className={`font-serif text-[15px] ${monthlyIncomeOverride * 12 > yearTotalSpent ? 'text-[#7FAF7B]' : 'text-[#C47B6A]'}`}>
+                          {formatAUD(Math.abs(monthlyIncomeOverride * 12 - yearTotalSpent))}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* 12-month bar chart */}
+            <div className="px-5 mb-4">
+              <div className="bg-[#EDE8DF] border border-[#D4CEC4] rounded-[22px] p-5">
+                <p className="font-outfit text-[11px] uppercase tracking-[2.5px] text-[#B8955A] mb-4">Monthly Breakdown</p>
+                <div className="space-y-2">
+                  {yearMonthlyTotals.map((m) => {
+                    const maxTotal = Math.max(...yearMonthlyTotals.map(x => x.total), 1);
+                    const pct = (m.total / maxTotal) * 100;
+                    const isCurrentMonth = m.month === new Date().getMonth() && viewYear === new Date().getFullYear();
+                    return (
+                      <div key={m.month} className="flex items-center gap-3">
+                        <p className={`font-outfit text-[11px] w-8 flex-shrink-0 ${isCurrentMonth ? 'text-[#B8955A] font-semibold' : 'text-[#6B6560]'}`}>{m.label}</p>
+                        <div className="flex-1 h-5 bg-[#D4CEC4] rounded-full overflow-hidden">
+                          {m.total > 0 && (
+                            <motion.div
+                              initial={{ width: 0 }}
+                              animate={{ width: `${pct}%` }}
+                              transition={{ duration: 0.6, delay: m.month * 0.04, ease: [0.16, 1, 0.3, 1] }}
+                              className="h-full rounded-full"
+                              style={{ background: isCurrentMonth ? '#B8955A' : '#1A1A1A' }}
+                            />
+                          )}
+                        </div>
+                        <p className="font-outfit text-[11px] w-16 text-right flex-shrink-0 text-[#1A1A1A]">
+                          {m.total > 0 ? formatCompact(m.total) : '—'}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {yearExpenses.length === 0 && !loading && (
+              <div className="flex flex-col items-center justify-center py-16 px-8 text-center">
+                <div className="text-[40px] mb-4">📅</div>
+                <h3 className="font-serif text-[20px] text-[#1A1A1A] mb-2">No data for {viewYear}</h3>
+                <p className="font-outfit text-[13px] text-[#6B6560]">Scan some receipts to see your year summary</p>
+              </div>
+            )}
+          </motion.div>
+        )}
+
+        {activeTab === 'overview' && viewMode === 'month' && (
           <motion.div key="overview" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}>
 
             {/* Hero Card */}
@@ -1177,7 +1330,7 @@ export default function FinancesTab() {
                   <div className="grid grid-cols-3 gap-4 mt-4">
                     <div>
                       <p className="font-outfit text-[10px] text-white/40 uppercase tracking-wider">Daily avg</p>
-                      <p className="font-serif text-[16px] text-white">{formatCompact(totalSpent / Math.max(new Date().getDate(), 1))}</p>
+                      <p className="font-serif text-[16px] text-white">{formatCompact(totalSpent / daysElapsed)}</p>
                     </div>
                     <div>
                       <p className="font-outfit text-[10px] text-white/40 uppercase tracking-wider">Receipts</p>
@@ -1185,19 +1338,51 @@ export default function FinancesTab() {
                     </div>
                     <div>
                       <p className="font-outfit text-[10px] text-white/40 uppercase tracking-wider">Health</p>
-                      <p className="font-serif text-[16px]" style={{ color: budgetHealth.color }}>{budgetHealth.score}</p>
+                      <p className="font-serif text-[16px]" style={{ color: budgetHealth.color }}>{budgetHealth.label}</p>
                     </div>
                   </div>
 
-                  {/* Cash flow (if income data) */}
-                  {monthIncome > 0 && (
-                    <div className="mt-4 pt-4 border-t border-white/10 flex items-center justify-between">
-                      <span className="font-outfit text-[12px] text-white/50">Income</span>
-                      <span className="font-outfit text-[13px] text-[#4CAF50]">{formatAUD(monthIncome)}</span>
-                      <span className="font-outfit text-[12px] text-white/50">Saved</span>
-                      <span className={`font-outfit text-[13px] ${monthIncome > totalSpent ? 'text-[#4CAF50]' : 'text-[#C47B6A]'}`}>
-                        {formatAUD(Math.abs(monthIncome - totalSpent))}
-                      </span>
+                  {/* Cash flow row */}
+                  {monthIncome > 0 ? (
+                    <div className="mt-4 pt-4 border-t border-white/10">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-outfit text-[11px] text-white/50">Income</span>
+                        <span className="font-outfit text-[13px] font-semibold text-[#7FAF7B]">{formatAUD(monthIncome)}</span>
+                      </div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-outfit text-[11px] text-white/50">Spent</span>
+                        <span className="font-outfit text-[13px] text-white">{formatAUD(totalSpent)}</span>
+                      </div>
+                      <div className="flex items-center justify-between pt-2 border-t border-white/10">
+                        <span className="font-outfit text-[11px] text-white/50">
+                          {monthIncome > totalSpent ? 'Saved this month' : 'Overspend'}
+                        </span>
+                        <span className={`font-outfit text-[15px] font-semibold ${monthIncome > totalSpent ? 'text-[#7FAF7B]' : 'text-[#C47B6A]'}`}>
+                          {monthIncome > totalSpent ? '+' : '-'}{formatAUD(Math.abs(monthIncome - totalSpent))}
+                        </span>
+                      </div>
+                      {/* Savings rate bar */}
+                      <div className="mt-3">
+                        <div className="flex justify-between mb-1">
+                          <span className="font-outfit text-[10px] text-white/40">Savings rate</span>
+                          <span className="font-outfit text-[10px] text-white/60">
+                            {monthIncome > 0 ? Math.round(Math.max(0, (monthIncome - totalSpent) / monthIncome * 100)) : 0}%
+                          </span>
+                        </div>
+                        <div className="h-1 bg-white/10 rounded-full overflow-hidden">
+                          <motion.div
+                            initial={{ width: 0 }}
+                            animate={{ width: `${Math.min(100, Math.max(0, (monthIncome - totalSpent) / monthIncome * 100))}%` }}
+                            transition={{ duration: 1, ease: [0.16, 1, 0.3, 1], delay: 0.4 }}
+                            className="h-full rounded-full bg-[#7FAF7B]"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-4 pt-3 border-t border-white/10 flex items-center justify-between">
+                      <p className="font-outfit text-[11px] text-white/40">Set income in Settings for cash flow</p>
+                      <span className="font-outfit text-[10px] text-[#B8955A] px-2 py-0.5 bg-[#B8955A]/20 rounded-full">Settings → Finances</span>
                     </div>
                   )}
                 </div>
@@ -1298,12 +1483,79 @@ export default function FinancesTab() {
               </div>
             )}
 
+            {/* Savings Goals */}
+            {savingsGoals.length > 0 && (
+              <div className="px-5 mb-4">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="font-outfit text-[11px] uppercase tracking-[2.5px] text-[#B8955A]">Savings Goals</p>
+                  <motion.button
+                    whileTap={{ scale: 0.93 }}
+                    onClick={() => setShowAddGoalSheet(true)}
+                    className="font-outfit text-[12px] text-[#B8955A] font-semibold bg-[#EDE8DF] px-3 py-1 rounded-full"
+                  >
+                    + Add Goal
+                  </motion.button>
+                </div>
+                <div className="space-y-3">
+                  {savingsGoals.map((g: any) => {
+                    const pct = g.targetAmount > 0 ? Math.min(100, (g.currentAmount / g.targetAmount) * 100) : 0;
+                    const done = pct >= 100;
+                    const targetDate = g.targetDate?.toDate ? g.targetDate.toDate() : g.targetDate ? new Date(g.targetDate) : null;
+                    return (
+                      <div key={g.id} className="bg-[#EDE8DF] border border-[#D4CEC4] rounded-[20px] p-4">
+                        <div className="flex items-start justify-between mb-2">
+                          <div>
+                            <p className="font-outfit text-[14px] font-semibold text-[#1A1A1A]">{g.title || g.name}</p>
+                            {targetDate && (
+                              <p className="font-outfit text-[11px] text-[#6B6560] mt-0.5">
+                                Target: {format(targetDate, 'd MMM yyyy')}
+                              </p>
+                            )}
+                          </div>
+                          <span className={`font-outfit text-[11px] font-semibold px-2.5 py-1 rounded-full ${done ? 'bg-[#7FAF7B]/20 text-[#2E7D32]' : 'bg-[#B8955A]/15 text-[#B8955A]'}`}>
+                            {done ? '🎉 Done!' : `${Math.round(pct)}%`}
+                          </span>
+                        </div>
+                        <div className="h-2 bg-[#D4CEC4] rounded-full overflow-hidden mb-2">
+                          <motion.div
+                            initial={{ width: 0 }}
+                            animate={{ width: `${pct}%` }}
+                            transition={{ duration: 1, ease: [0.16, 1, 0.3, 1] }}
+                            className="h-full rounded-full"
+                            style={{ background: done ? '#7FAF7B' : '#B8955A' }}
+                          />
+                        </div>
+                        <div className="flex justify-between">
+                          <p className="font-outfit text-[12px] text-[#6B6560]">{formatAUD(g.currentAmount || 0)} saved</p>
+                          <p className="font-outfit text-[12px] text-[#6B6560]">Goal: {formatAUD(g.targetAmount)}</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {savingsGoals.length === 0 && !loading && (
+              <div className="px-5 mb-4">
+                <motion.button
+                  whileTap={{ scale: 0.97 }}
+                  onClick={() => setShowAddGoalSheet(true)}
+                  className="w-full p-5 bg-[#EDE8DF] border border-dashed border-[#B8955A]/40 rounded-[20px] flex flex-col items-center gap-2"
+                >
+                  <span className="text-[28px]">🎯</span>
+                  <p className="font-outfit text-[14px] font-semibold text-[#1A1A1A]">Set a savings goal</p>
+                  <p className="font-outfit text-[12px] text-[#6B6560]">Holiday, house deposit, emergency fund…</p>
+                </motion.button>
+              </div>
+            )}
+
             {/* Empty state */}
             {monthExpenses.length === 0 && !loading && (
-              <div className="flex flex-col items-center justify-center py-16 px-8 text-center">
+              <div className="flex flex-col items-center justify-center py-10 px-8 text-center">
                 <div className="w-16 h-16 rounded-full bg-[#EDE8DF] flex items-center justify-center mb-4 text-[28px]">🧾</div>
-                <h3 className="font-serif text-[20px] text-[#1A1A1A] mb-2">No expenses yet</h3>
-                <p className="font-outfit text-[13px] text-[#6B6560]">Scan a receipt to get started</p>
+                <h3 className="font-serif text-[20px] text-[#1A1A1A] mb-2">No expenses this month</h3>
+                <p className="font-outfit text-[13px] text-[#6B6560]">Tap + to scan a receipt or add manually</p>
               </div>
             )}
           </motion.div>
@@ -1633,21 +1885,9 @@ export default function FinancesTab() {
               className="fixed top-20 right-5 z-[200] bg-[#fcf9f4] border border-[#D4CEC4] rounded-2xl shadow-xl overflow-hidden"
             >
               {[
+                { label: '✍️ Add Expense Manually', action: () => { setShowMenu(false); setShowManualSheet(true); } },
                 { label: '📤 Import Bank Statement', action: () => { setShowMenu(false); setShowBankImport(true); } },
-                {
-                  label: '💰 Set Monthly Budget',
-                  action: () => {
-                    const val = prompt('Monthly budget (AUD):', monthlyBudget.toString());
-                    if (val && !isNaN(parseInt(val)) && householdId) {
-                      const num = parseInt(val);
-                      setMonthlyBudget(num);
-                      updateDoc(doc(db, 'households', householdId), {
-                        'budgetSettings.monthlyLimit': num
-                      }).catch(console.error);
-                    }
-                    setShowMenu(false);
-                  }
-                },
+                { label: '🎯 Add Savings Goal', action: () => { setShowMenu(false); setShowAddGoalSheet(true); } },
               ].map(item => (
                 <button
                   key={item.label}
@@ -1697,6 +1937,178 @@ export default function FinancesTab() {
             expenses={expenses}
             onBack={() => setDrillDownCat(null)}
           />
+        )}
+      </AnimatePresence>
+
+      {/* ── Manual Expense Sheet ─────────────────────────────────────────── */}
+      <AnimatePresence>
+        {showManualSheet && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[9999] bg-[#1A1A1A]/60 backdrop-blur-sm flex items-end"
+            onClick={() => setShowManualSheet(false)}
+          >
+            <motion.div
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={SPRING_DEFAULT}
+              className="bg-[#fcf9f4] rounded-t-[28px] w-full max-h-[85dvh] flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="px-6 pt-5 pb-4 flex items-center justify-between flex-shrink-0">
+                <h2 className="font-serif text-[20px] text-[#1A1A1A]">Add Expense</h2>
+                <button onClick={() => setShowManualSheet(false)} className="w-10 h-10 rounded-full bg-[#EDE8DF] flex items-center justify-center">
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto px-6 pb-8 space-y-4">
+                <input
+                  autoFocus
+                  placeholder="Merchant / description"
+                  value={manualMerchant}
+                  onChange={(e) => setManualMerchant(e.target.value)}
+                  className="w-full h-14 px-4 bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl font-outfit text-[16px] text-[#1A1A1A] outline-none focus:border-[#B8955A]"
+                />
+                <div className="relative">
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 font-outfit text-[16px] text-[#1A1A1A]">$</span>
+                  <input
+                    type="number"
+                    placeholder="0.00"
+                    value={manualAmount}
+                    onChange={(e) => setManualAmount(e.target.value)}
+                    className="w-full h-14 pl-8 pr-4 bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl font-outfit text-[16px] text-[#1A1A1A] outline-none focus:border-[#B8955A]"
+                  />
+                </div>
+                <div>
+                  <label className="font-outfit text-[11px] uppercase tracking-wider text-[#6B6560] mb-1.5 block">Category</label>
+                  <select
+                    value={manualCategory}
+                    onChange={(e) => setManualCategory(e.target.value)}
+                    className="w-full h-12 px-4 bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl font-outfit text-[14px] text-[#1A1A1A] outline-none"
+                  >
+                    {['groceries','dining','transport','entertainment','health','shopping','utilities','rent','other'].map(c => (
+                      <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="font-outfit text-[11px] uppercase tracking-wider text-[#6B6560] mb-1.5 block">Date</label>
+                  <input
+                    type="date"
+                    value={manualDate}
+                    onChange={(e) => setManualDate(e.target.value)}
+                    className="w-full h-12 px-4 bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl font-outfit text-[14px] text-[#1A1A1A] outline-none"
+                  />
+                </div>
+                <motion.button
+                  whileTap={{ scale: 0.97 }}
+                  onClick={async () => {
+                    if (!manualMerchant.trim() || !manualAmount || !householdId || !user) return;
+                    const expDate = manualDate ? new Date(manualDate) : new Date();
+                    await addDoc(collection(db, `households/${householdId}/expenses`), {
+                      merchantName: manualMerchant.trim(),
+                      total: parseFloat(manualAmount),
+                      date: expDate,
+                      category: manualCategory,
+                      lineItems: [],
+                      paidBy: user.uid,
+                      source: 'manual',
+                      budgetMonth: format(expDate, 'yyyy-MM'),
+                      createdAt: serverTimestamp(),
+                    });
+                    setManualMerchant('');
+                    setManualAmount('');
+                    setManualCategory('other');
+                    setManualDate(format(new Date(), 'yyyy-MM-dd'));
+                    setShowManualSheet(false);
+                  }}
+                  className="w-full h-14 bg-[#1A1A1A] text-white rounded-full font-outfit font-semibold text-[15px]"
+                >
+                  Add Expense
+                </motion.button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Add Savings Goal Sheet ───────────────────────────────────────── */}
+      <AnimatePresence>
+        {showAddGoalSheet && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[9999] bg-[#1A1A1A]/60 backdrop-blur-sm flex items-end"
+            onClick={() => setShowAddGoalSheet(false)}
+          >
+            <motion.div
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={SPRING_DEFAULT}
+              className="bg-[#fcf9f4] rounded-t-[28px] w-full max-h-[85dvh] flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="px-6 pt-5 pb-4 flex items-center justify-between flex-shrink-0">
+                <h2 className="font-serif text-[20px] text-[#1A1A1A]">New Savings Goal</h2>
+                <button onClick={() => setShowAddGoalSheet(false)} className="w-10 h-10 rounded-full bg-[#EDE8DF] flex items-center justify-center">
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto px-6 pb-8 space-y-4">
+                <input
+                  autoFocus
+                  placeholder="Goal name (e.g. Holiday, House deposit)"
+                  value={goalName}
+                  onChange={(e) => setGoalName(e.target.value)}
+                  className="w-full h-14 px-4 bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl font-outfit text-[15px] text-[#1A1A1A] outline-none focus:border-[#B8955A]"
+                />
+                <div className="relative">
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 font-outfit text-[16px] text-[#1A1A1A]">$</span>
+                  <input
+                    type="number"
+                    placeholder="Target amount"
+                    value={goalTarget}
+                    onChange={(e) => setGoalTarget(e.target.value)}
+                    className="w-full h-14 pl-8 pr-4 bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl font-outfit text-[16px] text-[#1A1A1A] outline-none focus:border-[#B8955A]"
+                  />
+                </div>
+                <div>
+                  <label className="font-outfit text-[11px] uppercase tracking-wider text-[#6B6560] mb-1.5 block">Target Date (optional)</label>
+                  <input
+                    type="date"
+                    value={goalDeadline}
+                    onChange={(e) => setGoalDeadline(e.target.value)}
+                    className="w-full h-12 px-4 bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl font-outfit text-[14px] text-[#1A1A1A] outline-none"
+                  />
+                </div>
+                <motion.button
+                  whileTap={{ scale: 0.97 }}
+                  onClick={async () => {
+                    if (!goalName.trim() || !goalTarget || !householdId) return;
+                    await addDoc(collection(db, `households/${householdId}/savingsGoals`), {
+                      title: goalName.trim(),
+                      targetAmount: parseFloat(goalTarget),
+                      currentAmount: 0,
+                      targetDate: goalDeadline ? new Date(goalDeadline) : null,
+                      createdAt: serverTimestamp(),
+                    });
+                    setGoalName('');
+                    setGoalTarget('');
+                    setGoalDeadline('');
+                    setShowAddGoalSheet(false);
+                  }}
+                  className="w-full h-14 bg-[#1A1A1A] text-white rounded-full font-outfit font-semibold text-[15px]"
+                >
+                  Create Goal
+                </motion.button>
+              </div>
+            </motion.div>
+          </motion.div>
         )}
       </AnimatePresence>
     </div>
