@@ -1129,7 +1129,13 @@ export default function FinancesTab() {
   }, [viewMonth]);
 
   const monthExpenses = useMemo(() =>
-    expenses.filter(e => e.budgetMonth === monthKey),
+    expenses.filter(e => {
+      // Use actual expense date as primary source of truth (budgetMonth was stored
+      // incorrectly by old code — "today" instead of the receipt's date).
+      // Fall back to budgetMonth only if date is missing/invalid.
+      const dateMonth = format(e.date, 'yyyy-MM');
+      return dateMonth === monthKey;
+    }),
     [expenses, monthKey]
   );
 
@@ -1149,9 +1155,9 @@ export default function FinancesTab() {
     return bankIncome > 0 ? bankIncome : monthlyIncomeOverride;
   }, [bankTransactions, monthKey, monthlyIncomeOverride]);
 
-  // Year-level aggregates for year view
+  // Year-level aggregates for year view — use actual date, same as monthExpenses
   const yearExpenses = useMemo(() =>
-    expenses.filter(e => e.budgetMonth?.startsWith(String(viewYear))),
+    expenses.filter(e => e.date.getFullYear() === viewYear),
     [expenses, viewYear]
   );
 
@@ -1162,8 +1168,10 @@ export default function FinancesTab() {
 
   const yearMonthlyTotals = useMemo(() => {
     const months = Array.from({ length: 12 }, (_, i) => {
-      const key = `${viewYear}-${String(i + 1).padStart(2, '0')}`;
-      const total = expenses.filter(e => e.budgetMonth === key).reduce((s, e) => s + e.total, 0);
+      // Filter by actual date (month index i, year viewYear)
+      const total = expenses
+        .filter(e => e.date.getFullYear() === viewYear && e.date.getMonth() === i)
+        .reduce((s, e) => s + e.total, 0);
       return { month: i, label: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][i], total };
     });
     return months;
@@ -2248,7 +2256,7 @@ export default function FinancesTab() {
         {drillDownCat && (
           <CategoryDrillDown
             category={drillDownCat}
-            expenses={expenses}
+            expenses={monthExpenses}
             onBack={() => setDrillDownCat(null)}
           />
         )}
