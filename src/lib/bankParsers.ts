@@ -297,65 +297,327 @@ export const parseCSV = (csv: string, filename: string): BankTransaction[] => {
 };
 
 // ============================================================
-// PDF PARSER — Gemini Vision
+// PDF TEXT EXTRACTION (pdfjs-dist — free, client-side)
 // ============================================================
-export const parsePDF = async (
-  file: File
-): Promise<BankTransaction[]> => {
-  const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
-  if (!apiKey) throw new Error('Bank parsing requires VITE_GEMINI_API_KEY');
+export const extractPDFText = async (file: File): Promise<{ pages: string[]; fullText: string }> => {
+  // Dynamic import so pdfjs-dist is only loaded when needed
+  const pdfjsLib = await import('pdfjs-dist');
+  // Point worker at the installed package worker
+  pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+    'pdfjs-dist/build/pdf.worker.min.mjs',
+    import.meta.url
+  ).toString();
 
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: 'gemini-flash-latest' });
   const arrayBuffer = await file.arrayBuffer();
-  const bytes = new Uint8Array(arrayBuffer);
-  let binary = '';
-  bytes.forEach(b => binary += String.fromCharCode(b));
-  const base64 = btoa(binary);
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const pages: string[] = [];
 
-  const result = await model.generateContent([
-    {
-      inlineData: {
-        mimeType: 'application/pdf',
-        data: base64,
-      },
-    },
-    `Extract ALL bank transactions from this statement. Return ONLY a JSON array, no markdown:
-[{
-  "date": "YYYY-MM-DD",
-  "description": "string",
-  "amount": -45.50,
-  "balance": 1234.56,
-  "type": "debit"
-}]
-Rules:
-- amount MUST be negative for expenses/debits, positive for income/credits
-- Include every transaction visible — no summary rows
-- date must be ISO format YYYY-MM-DD
-- If balance not visible use null`,
-  ]);
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const pageText = content.items
+      .map((item: any) => ('str' in item ? item.str : ''))
+      .join(' ');
+    pages.push(pageText);
+  }
 
-  const text = result.response.text().trim();
-  const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-  const parsed: Array<{ date: string; description: string; amount: number; balance?: number; type: 'debit' | 'credit' }> = JSON.parse(cleaned);
-
-  return parsed.map((tx, i) => {
-    const type: 'debit' | 'credit' = tx.amount < 0 ? 'debit' : 'credit';
-    const t: BankTransaction = {
-      id: `pdf-${i}`,
-      date: parseDate(tx.date),
-      description: tx.description,
-      cleanDescription: cleanDesc(tx.description),
-      amount: tx.amount,
-      balance: tx.balance,
-      type,
-      bankSource: `pdf-${file.name}`,
-      rawRow: JSON.stringify(tx),
-    };
-    if (type === 'credit') t.incomeType = detectIncomeType(tx.description);
-    return t;
-  });
+  return { pages, fullText: pages.join('\n--- PAGE BREAK ---\n') };
 };
+
+// ============================================================
+// REGEX TRANSACTION PARSER (zero AI cost)
+// Works on Australian bank statement text extracted by pdfjs-dist
+// ============================================================
+export const parseTransactionsFromText = (text: string): BankTransaction[] => {
+  const transactions: BankTransaction[] = [];
+  const lines = text.split(/\n|--- PAGE BREAK ---/).map(l => l.trim()).filter(Boolean);
+
+  // Australian date patterns: DD/MM/YYYY, DD MMM YYYY, DD MMM YY
+  const datePattern = /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{2,4})/i;
+  // Amount pattern: $1,234.56 or 1234.56 or (1,234.56) for negative
+  const amountPattern = /(?:\$?\s*)((?:\([\d,]+\.\d{2}\))|(?:[\d,]+\.\d{2}))/g;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const dateMatch = line.match(datePattern);
+    if (!dateMatch) continue;
+
+    // Find all amounts on this line
+    const amounts: number[] = [];
+    let m: RegExpExecArray | null;
+    amountPattern.lastIndex = 0;
+    while ((m = amountPattern.exec(line)) !== null) {
+      const raw = m[1];
+      const isNeg = raw.startsWith('(');
+      const val = parseFloat(raw.replace(/[^0-9.]/g, '')) * (isNeg ? -1 : 1);
+      if (!isNaN(val) && val !== 0) amounts.push(val);
+    }
+    if (amounts.length === 0) continue;
+
+    // Description: everything between date and first amount
+    const dateEnd = dateMatch.index! + dateMatch[0].length;
+    let desc = line.substring(dateEnd).replace(amountPattern, '').trim();
+    if (!desc || desc.length < 3) desc = lines[i + 1]?.substring(0, 60) || 'Unknown';
+    desc = cleanDesc(desc);
+    if (!desc || desc.length < 2) continue;
+
+    // Debit/credit heuristic:
+    // If line has 2+ amounts, last is usually balance → use second-to-last as transaction
+    // If negative → credit (money in), positive → debit (money out) — Australian convention
+    const txAmount = amounts.length >= 2 ? amounts[amounts.length - 2] : amounts[0];
+    // In most AU bank statements, debits are shown as positive and credits negative OR
+    // there's a separate Dr/Cr indicator
+    const hasDr = /\bdr\b/i.test(line);
+    const hasCr = /\bcr\b/i.test(line);
+    const type: 'debit' | 'credit' = hasCr
+      ? 'credit'
+      : hasDr
+      ? 'debit'
+      : txAmount < 0
+      ? 'credit'   // negative in statement = money in (credit)
+      : 'debit';   // positive = money out (debit)
+
+    const absAmount = Math.abs(txAmount);
+    if (absAmount < 0.01 || absAmount > 1000000) continue;
+
+    const t: BankTransaction = {
+      id: `regex-${transactions.length}`,
+      date: parseDate(dateMatch[0]),
+      description: desc,
+      cleanDescription: desc,
+      amount: type === 'credit' ? absAmount : -absAmount,
+      balance: amounts.length >= 2 ? Math.abs(amounts[amounts.length - 1]) : undefined,
+      type,
+      bankSource: 'pdf-regex',
+      rawRow: line,
+    };
+    if (type === 'credit') t.incomeType = detectIncomeType(desc);
+    transactions.push(t);
+  }
+
+  return transactions;
+};
+
+// ============================================================
+// BATCH CATEGORIZE with merchant cache (minimises AI calls)
+// ============================================================
+export const batchCategorizeWithCache = async (
+  transactions: Array<{ description: string; type: 'debit' | 'credit' }>,
+  householdId: string,
+  onProgress?: (pct: number) => void
+): Promise<Array<{ category: string; subcategory?: string; fromCache: boolean }>> => {
+  const { getMerchantCache, saveMerchantCache, normalizeMerchant } = await import('./merchantCache');
+
+  // Load cache for all merchants
+  const merchants = transactions.map(t => t.description);
+  const cache = await getMerchantCache(householdId, merchants);
+
+  const results: Array<{ category: string; subcategory?: string; fromCache: boolean }> = new Array(transactions.length);
+  const uncachedIndices: number[] = [];
+
+  // Apply cache hits
+  transactions.forEach((tx, i) => {
+    if (tx.type === 'credit') {
+      results[i] = { category: 'income', fromCache: true };
+      return;
+    }
+    const key = normalizeMerchant(tx.description);
+    const cached = cache[key];
+    if (cached) {
+      results[i] = { category: cached.category, subcategory: cached.subcategory, fromCache: true };
+    } else {
+      uncachedIndices.push(i);
+    }
+  });
+
+  onProgress?.(30);
+
+  if (uncachedIndices.length === 0) {
+    onProgress?.(100);
+    return results;
+  }
+
+  // Batch uncached merchants — 30 per AI call
+  const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
+  const BATCH_SIZE = 30;
+  const batches: number[][] = [];
+  for (let i = 0; i < uncachedIndices.length; i += BATCH_SIZE) {
+    batches.push(uncachedIndices.slice(i, i + BATCH_SIZE));
+  }
+
+  for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+    const batch = batches[batchIdx];
+    const items = batch.map(i => transactions[i].description);
+
+    let batchResults: Array<{ category: string; subcategory?: string }> = [];
+
+    if (apiKey) {
+      try {
+        const { GoogleGenerativeAI } = await import('@google/generative-ai');
+        const genAI = new GoogleGenerativeAI(apiKey);
+        const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite' }); // cheapest model
+        const prompt = `Categorize these bank transaction descriptions. Categories: groceries, dining, transport, entertainment, health, shopping, utilities, rent, subscription, insurance, education, travel, personal_care, home, other.
+Return ONLY a JSON array (no markdown), one object per item:
+[{"category":"groceries","subcategory":"supermarket"}]
+Descriptions:
+${items.map((d, i) => `${i + 1}. ${d}`).join('\n')}`;
+
+        const res = await model.generateContent(prompt);
+        const text = res.response.text().replace(/```json\n?/g, '').replace(/```/g, '').trim();
+        const parsed = JSON.parse(text);
+        batchResults = Array.isArray(parsed) ? parsed : items.map(() => ({ category: 'other' }));
+      } catch {
+        batchResults = items.map(() => ({ category: 'other' }));
+      }
+    } else {
+      // No API key: use simple keyword matching
+      batchResults = items.map(d => ({ category: guessCategory(d) }));
+    }
+
+    // Apply results and save to cache
+    const cacheEntries: Array<{ merchant: string; entry: Partial<import('./merchantCache').MerchantEntry> }> = [];
+    batch.forEach((txIdx, i) => {
+      const cat = batchResults[i]?.category || 'other';
+      const sub = batchResults[i]?.subcategory;
+      results[txIdx] = { category: cat, subcategory: sub, fromCache: false };
+      cacheEntries.push({
+        merchant: transactions[txIdx].description,
+        entry: { category: cat, subcategory: sub, isSubscription: cat === 'subscription', isIncome: false, confirmedByUser: false },
+      });
+    });
+
+    if (householdId) await saveMerchantCache(householdId, cacheEntries);
+    onProgress?.(30 + ((batchIdx + 1) / batches.length) * 65);
+  }
+
+  onProgress?.(100);
+  return results;
+};
+
+// Simple keyword fallback (no AI needed for obvious ones)
+const guessCategory = (desc: string): string => {
+  const d = desc.toLowerCase();
+  if (/woolworths|coles|aldi|iga|costco|harris farm/.test(d)) return 'groceries';
+  if (/mcdonald|kfc|hungry|domino|pizza|cafe|restaurant|uber eat|doordash/.test(d)) return 'dining';
+  if (/uber|lyft|taxi|train|bus|transport|toll|opal|parking|petrol|bp |shell|caltex/.test(d)) return 'transport';
+  if (/netflix|spotify|amazon|prime|disney|youtube|hulu|stan|foxtel|apple tv/.test(d)) return 'subscription';
+  if (/gym|fitness|sport|swim|tennis/.test(d)) return 'health';
+  if (/chemist|pharmacy|doctor|dentist|hospital|medical/.test(d)) return 'health';
+  if (/electricity|water|gas|internet|phone|nbn|optus|telstra|vodafone/.test(d)) return 'utilities';
+  if (/rent|lease|strata|landlord/.test(d)) return 'rent';
+  if (/amazon|ebay|kmart|target|big w|myer|david jones/.test(d)) return 'shopping';
+  if (/insurance|aami|nrma|budget direct/.test(d)) return 'insurance';
+  return 'other';
+};
+
+// ============================================================
+// SMART PDF PARSER (replaces old parsePDF)
+// 1. Extract text client-side with pdfjs-dist (free)
+// 2. Parse transactions with regex (free)
+// 3. Only if regex fails → send TEXT (not PDF binary) to Gemini (cheap)
+// ============================================================
+export const parsePDFSmart = async (
+  file: File,
+  onProgress?: (pct: number, status: string) => void
+): Promise<BankTransaction[]> => {
+  onProgress?.(5, 'Extracting text from PDF…');
+
+  let pages: string[] = [];
+  let fullText = '';
+
+  try {
+    const extracted = await extractPDFText(file);
+    pages = extracted.pages;
+    fullText = extracted.fullText;
+    onProgress?.(30, `Extracted ${pages.length} pages`);
+  } catch (e) {
+    onProgress?.(30, 'Text extraction failed, trying AI…');
+  }
+
+  // Try regex parser first (free)
+  if (fullText) {
+    const regexTxs = parseTransactionsFromText(fullText);
+    if (regexTxs.length >= 5) {
+      onProgress?.(90, `Found ${regexTxs.length} transactions via text`);
+      return regexTxs;
+    }
+  }
+
+  // Fallback: send TEXT to Gemini (much cheaper than PDF binary)
+  const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
+  if (!apiKey) throw new Error('Could not parse PDF — add VITE_GEMINI_API_KEY for AI parsing');
+
+  onProgress?.(40, 'Sending text to AI for parsing…');
+
+  const { GoogleGenerativeAI } = await import('@google/generative-ai');
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite' }); // cheapest text model
+
+  // If text extraction failed, send PDF as last resort — but in 3-page chunks
+  let allTransactions: BankTransaction[] = [];
+
+  if (!fullText && pages.length === 0) {
+    // True last resort: send the actual PDF
+    onProgress?.(50, 'Parsing PDF with AI…');
+    const arrayBuffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    let binary = '';
+    bytes.forEach(b => (binary += String.fromCharCode(b)));
+    const base64 = btoa(binary);
+
+    const result = await model.generateContent([
+      { inlineData: { mimeType: 'application/pdf', data: base64 } },
+      `Extract ALL bank transactions as JSON array. No markdown. Format: [{"date":"YYYY-MM-DD","description":"string","amount":-45.50,"type":"debit"}]. Negative amounts = expenses.`,
+    ]);
+    const raw = result.response.text().replace(/```json\n?/g, '').replace(/```/g, '').trim();
+    const parsed: any[] = JSON.parse(raw);
+    allTransactions = parsed.map((tx: any, i: number) => {
+      const type: 'debit' | 'credit' = tx.amount < 0 ? 'debit' : 'credit';
+      const t: BankTransaction = {
+        id: `pdf-${i}`, date: parseDate(tx.date), description: tx.description,
+        cleanDescription: cleanDesc(tx.description), amount: tx.amount,
+        balance: tx.balance, type, bankSource: 'pdf-ai', rawRow: JSON.stringify(tx),
+      };
+      if (type === 'credit') t.incomeType = detectIncomeType(tx.description);
+      return t;
+    });
+  } else {
+    // Send text in page-group chunks (3 pages at a time) to Gemini
+    const CHUNK_SIZE = 3;
+    for (let i = 0; i < pages.length; i += CHUNK_SIZE) {
+      const chunk = pages.slice(i, i + CHUNK_SIZE).join('\n');
+      onProgress?.(40 + (i / pages.length) * 50, `Processing pages ${i + 1}–${Math.min(i + CHUNK_SIZE, pages.length)}…`);
+      try {
+        const result = await model.generateContent(
+          `Extract bank transactions from this bank statement text. Return ONLY a JSON array, no markdown:
+[{"date":"YYYY-MM-DD","description":"string","amount":-45.50,"type":"debit"}]
+Rules: negative amounts=expenses, positive=income. Skip totals/summaries/headers.
+TEXT:
+${chunk.substring(0, 8000)}`
+        );
+        const raw = result.response.text().replace(/```json\n?/g, '').replace(/```/g, '').trim();
+        const parsed: any[] = JSON.parse(raw);
+        const chunkTxs = parsed.map((tx: any, j: number) => {
+          const type: 'debit' | 'credit' = tx.amount < 0 ? 'debit' : 'credit';
+          const t: BankTransaction = {
+            id: `pdf-chunk${i}-${j}`, date: parseDate(tx.date), description: tx.description,
+            cleanDescription: cleanDesc(tx.description), amount: tx.amount,
+            balance: tx.balance, type, bankSource: 'pdf-ai-text', rawRow: JSON.stringify(tx),
+          };
+          if (type === 'credit') t.incomeType = detectIncomeType(tx.description);
+          return t;
+        });
+        allTransactions.push(...chunkTxs);
+      } catch { /* skip failed chunk */ }
+    }
+  }
+
+  onProgress?.(95, `Parsed ${allTransactions.length} transactions`);
+  return allTransactions;
+};
+
+// Keep old parsePDF as alias for backward compat
+export const parsePDF = parsePDFSmart;
 
 // ============================================================
 // DUPLICATE DETECTION
