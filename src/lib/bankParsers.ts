@@ -1,10 +1,10 @@
 /**
  * OurSpace — Bank Statement Parsers
- * Supports CommBank, NAB, ANZ, Westpac, Macquarie, ING, Bendigo, generic
- * CSV parsing is pure TS. PDF uses Gemini Vision.
+ * CSV: pure TS per-bank parsers (CommBank, NAB, ANZ, Westpac, Macquarie, ING, Bendigo, generic)
+ * PDF: pdfjs-dist (free text extraction, Y/X sorted) → Gemini 2.5 Flash in 3-page chunks
+ * Merchant cache: once categorised, never calls AI again for same merchant
  */
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { detectIncomeType } from './cashflow';
 
 // ============================================================
@@ -298,11 +298,11 @@ export const parseCSV = (csv: string, filename: string): BankTransaction[] => {
 
 // ============================================================
 // PDF TEXT EXTRACTION (pdfjs-dist — free, client-side)
+// Sorts text items by Y then X so columns/rows are in reading order.
+// Without this, pdfjs returns items in PDF-stream order which garbles columns.
 // ============================================================
 export const extractPDFText = async (file: File): Promise<{ pages: string[]; fullText: string }> => {
-  // Dynamic import so pdfjs-dist is only loaded when needed
   const pdfjsLib = await import('pdfjs-dist');
-  // Point worker at the installed package worker
   pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
     'pdfjs-dist/build/pdf.worker.min.mjs',
     import.meta.url
@@ -315,91 +315,63 @@ export const extractPDFText = async (file: File): Promise<{ pages: string[]; ful
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
-    const pageText = content.items
-      .map((item: any) => ('str' in item ? item.str : ''))
-      .join(' ');
-    pages.push(pageText);
+
+    // Sort by Y descending (top → bottom) then X ascending (left → right)
+    // PDF Y=0 is bottom of page, so higher Y = higher on page.
+    const items = [...content.items].sort((a: any, b: any) => {
+      const yA = a.transform?.[5] ?? 0;
+      const yB = b.transform?.[5] ?? 0;
+      const yDiff = yB - yA;
+      if (Math.abs(yDiff) > 4) return yDiff;               // different lines
+      return (a.transform?.[4] ?? 0) - (b.transform?.[4] ?? 0); // same line: left→right
+    });
+
+    // Group into lines by Y band, emit each line on its own row
+    const lines: string[] = [];
+    let lineY: number | null = null;
+    let line = '';
+    for (const item of items) {
+      const str = (item as any).str ?? '';
+      if (!str.trim()) continue;
+      const y = Math.round(((item as any).transform?.[5] ?? 0) / 4) * 4;
+      if (lineY === null) lineY = y;
+      if (Math.abs(y - lineY) > 4) {
+        if (line.trim()) lines.push(line.trim());
+        line = '';
+        lineY = y;
+      }
+      line += (line ? '  ' : '') + str;
+    }
+    if (line.trim()) lines.push(line.trim());
+
+    pages.push(lines.join('\n'));
   }
 
   return { pages, fullText: pages.join('\n--- PAGE BREAK ---\n') };
 };
 
 // ============================================================
-// REGEX TRANSACTION PARSER (zero AI cost)
-// Works on Australian bank statement text extracted by pdfjs-dist
+// KEYWORD FALLBACK CATEGORISER (no AI, no API key needed)
 // ============================================================
-export const parseTransactionsFromText = (text: string): BankTransaction[] => {
-  const transactions: BankTransaction[] = [];
-  const lines = text.split(/\n|--- PAGE BREAK ---/).map(l => l.trim()).filter(Boolean);
-
-  // Australian date patterns: DD/MM/YYYY, DD MMM YYYY, DD MMM YY
-  const datePattern = /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{2,4})/i;
-  // Amount pattern: $1,234.56 or 1234.56 or (1,234.56) for negative
-  const amountPattern = /(?:\$?\s*)((?:\([\d,]+\.\d{2}\))|(?:[\d,]+\.\d{2}))/g;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const dateMatch = line.match(datePattern);
-    if (!dateMatch) continue;
-
-    // Find all amounts on this line
-    const amounts: number[] = [];
-    let m: RegExpExecArray | null;
-    amountPattern.lastIndex = 0;
-    while ((m = amountPattern.exec(line)) !== null) {
-      const raw = m[1];
-      const isNeg = raw.startsWith('(');
-      const val = parseFloat(raw.replace(/[^0-9.]/g, '')) * (isNeg ? -1 : 1);
-      if (!isNaN(val) && val !== 0) amounts.push(val);
-    }
-    if (amounts.length === 0) continue;
-
-    // Description: everything between date and first amount
-    const dateEnd = dateMatch.index! + dateMatch[0].length;
-    let desc = line.substring(dateEnd).replace(amountPattern, '').trim();
-    if (!desc || desc.length < 3) desc = lines[i + 1]?.substring(0, 60) || 'Unknown';
-    desc = cleanDesc(desc);
-    if (!desc || desc.length < 2) continue;
-
-    // Debit/credit heuristic:
-    // If line has 2+ amounts, last is usually balance → use second-to-last as transaction
-    // If negative → credit (money in), positive → debit (money out) — Australian convention
-    const txAmount = amounts.length >= 2 ? amounts[amounts.length - 2] : amounts[0];
-    // In most AU bank statements, debits are shown as positive and credits negative OR
-    // there's a separate Dr/Cr indicator
-    const hasDr = /\bdr\b/i.test(line);
-    const hasCr = /\bcr\b/i.test(line);
-    const type: 'debit' | 'credit' = hasCr
-      ? 'credit'
-      : hasDr
-      ? 'debit'
-      : txAmount < 0
-      ? 'credit'   // negative in statement = money in (credit)
-      : 'debit';   // positive = money out (debit)
-
-    const absAmount = Math.abs(txAmount);
-    if (absAmount < 0.01 || absAmount > 1000000) continue;
-
-    const t: BankTransaction = {
-      id: `regex-${transactions.length}`,
-      date: parseDate(dateMatch[0]),
-      description: desc,
-      cleanDescription: desc,
-      amount: type === 'credit' ? absAmount : -absAmount,
-      balance: amounts.length >= 2 ? Math.abs(amounts[amounts.length - 1]) : undefined,
-      type,
-      bankSource: 'pdf-regex',
-      rawRow: line,
-    };
-    if (type === 'credit') t.incomeType = detectIncomeType(desc);
-    transactions.push(t);
-  }
-
-  return transactions;
+export const guessCategory = (desc: string): string => {
+  const d = desc.toLowerCase();
+  if (/woolworths|coles|aldi|iga|costco|harris farm|foodworks/.test(d)) return 'groceries';
+  if (/mcdonald|kfc|hungry jack|domino|pizza|cafe|restaurant|uber eat|doordash|menulog/.test(d)) return 'dining';
+  if (/uber|ola|taxi|train|bus|transport|toll|opal|parking|petrol|bp |shell|caltex|ampol/.test(d)) return 'transport';
+  if (/netflix|spotify|amazon prime|disney|youtube premium|stan|foxtel|apple tv|binge/.test(d)) return 'subscription';
+  if (/gym|fitness|sport|swim|tennis|medicare|medibank|bupa|ahm/.test(d)) return 'health';
+  if (/chemist|pharmacy|doctor|dentist|hospital|medical|pathology/.test(d)) return 'health';
+  if (/electricity|water|gas|internet|nbn|optus|telstra|vodafone|aussie bb/.test(d)) return 'utilities';
+  if (/rent|lease|strata|landlord|real estate/.test(d)) return 'rent';
+  if (/amazon|ebay|kmart|target|big w|myer|david jones|the iconic|asos/.test(d)) return 'shopping';
+  if (/insurance|aami|nrma|gio|allianz|budget direct|suncorp/.test(d)) return 'insurance';
+  if (/salary|payroll|wages|pay from|employer/.test(d)) return 'income';
+  return 'other';
 };
 
 // ============================================================
-// BATCH CATEGORIZE with merchant cache (minimises AI calls)
+// BATCH CATEGORISE — merchant cache first, Gemini 2.5 Flash for unknowns
+// 30 merchants per AI call. Cache saves result forever.
 // ============================================================
 export const batchCategorizeWithCache = async (
   transactions: Array<{ description: string; type: 'debit' | 'credit' }>,
@@ -408,14 +380,12 @@ export const batchCategorizeWithCache = async (
 ): Promise<Array<{ category: string; subcategory?: string; fromCache: boolean }>> => {
   const { getMerchantCache, saveMerchantCache, normalizeMerchant } = await import('./merchantCache');
 
-  // Load cache for all merchants
   const merchants = transactions.map(t => t.description);
   const cache = await getMerchantCache(householdId, merchants);
 
   const results: Array<{ category: string; subcategory?: string; fromCache: boolean }> = new Array(transactions.length);
   const uncachedIndices: number[] = [];
 
-  // Apply cache hits
   transactions.forEach((tx, i) => {
     if (tx.type === 'credit') {
       results[i] = { category: 'income', fromCache: true };
@@ -426,197 +396,177 @@ export const batchCategorizeWithCache = async (
     if (cached) {
       results[i] = { category: cached.category, subcategory: cached.subcategory, fromCache: true };
     } else {
-      uncachedIndices.push(i);
+      // Keyword fallback first — covers obvious ones without any AI
+      const kwCat = guessCategory(tx.description);
+      if (kwCat !== 'other') {
+        results[i] = { category: kwCat, fromCache: false };
+      } else {
+        uncachedIndices.push(i);
+      }
     }
   });
 
   onProgress?.(30);
+  if (uncachedIndices.length === 0) { onProgress?.(100); return results; }
 
-  if (uncachedIndices.length === 0) {
-    onProgress?.(100);
-    return results;
-  }
-
-  // Batch uncached merchants — 30 per AI call
   const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
-  const BATCH_SIZE = 30;
-  const batches: number[][] = [];
-  for (let i = 0; i < uncachedIndices.length; i += BATCH_SIZE) {
-    batches.push(uncachedIndices.slice(i, i + BATCH_SIZE));
-  }
+  const BATCH = 30;
 
-  for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
-    const batch = batches[batchIdx];
-    const items = batch.map(i => transactions[i].description);
-
-    let batchResults: Array<{ category: string; subcategory?: string }> = [];
+  for (let b = 0; b < uncachedIndices.length; b += BATCH) {
+    const slice = uncachedIndices.slice(b, b + BATCH);
+    const items = slice.map(i => transactions[i].description);
+    let batchResults: Array<{ category: string; subcategory?: string }> = items.map(d => ({ category: guessCategory(d) }));
 
     if (apiKey) {
       try {
-        const { GoogleGenerativeAI } = await import('@google/generative-ai');
-        const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite' }); // cheapest model
-        const prompt = `Categorize these bank transaction descriptions. Categories: groceries, dining, transport, entertainment, health, shopping, utilities, rent, subscription, insurance, education, travel, personal_care, home, other.
-Return ONLY a JSON array (no markdown), one object per item:
-[{"category":"groceries","subcategory":"supermarket"}]
+        const { GoogleGenAI } = await import('@google/genai');
+        const ai = new GoogleGenAI({ apiKey });
+        const response = await ai.models.generateContent({
+          model: 'gemini-2.5-flash-preview-04-17',
+          contents: [{
+            role: 'user',
+            parts: [{ text: `Categorise these Australian bank transaction descriptions.
+Categories: groceries, dining, transport, entertainment, health, shopping, utilities, rent, subscription, insurance, education, travel, personal_care, home, income, other.
+Return ONLY a JSON array, no markdown, one object per item:
+[{"category":"groceries","subcategory":"supermarket","isSubscription":false}]
 Descriptions:
-${items.map((d, i) => `${i + 1}. ${d}`).join('\n')}`;
-
-        const res = await model.generateContent(prompt);
-        const text = res.response.text().replace(/```json\n?/g, '').replace(/```/g, '').trim();
-        const parsed = JSON.parse(text);
-        batchResults = Array.isArray(parsed) ? parsed : items.map(() => ({ category: 'other' }));
-      } catch {
-        batchResults = items.map(() => ({ category: 'other' }));
-      }
-    } else {
-      // No API key: use simple keyword matching
-      batchResults = items.map(d => ({ category: guessCategory(d) }));
+${items.map((d, i) => `${i + 1}. ${d}`).join('\n')}` }]
+          }],
+          config: { temperature: 0.1 },
+        });
+        const raw = (response.text ?? '').replace(/```json\n?/g, '').replace(/```/g, '').trim();
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) batchResults = parsed;
+      } catch { /* keep keyword fallback */ }
     }
 
-    // Apply results and save to cache
     const cacheEntries: Array<{ merchant: string; entry: Partial<import('./merchantCache').MerchantEntry> }> = [];
-    batch.forEach((txIdx, i) => {
+    slice.forEach((txIdx, i) => {
       const cat = batchResults[i]?.category || 'other';
       const sub = batchResults[i]?.subcategory;
       results[txIdx] = { category: cat, subcategory: sub, fromCache: false };
       cacheEntries.push({
         merchant: transactions[txIdx].description,
-        entry: { category: cat, subcategory: sub, isSubscription: cat === 'subscription', isIncome: false, confirmedByUser: false },
+        entry: { category: cat, subcategory: sub, isSubscription: cat === 'subscription', isIncome: cat === 'income', confirmedByUser: false },
       });
     });
 
-    if (householdId) await saveMerchantCache(householdId, cacheEntries);
-    onProgress?.(30 + ((batchIdx + 1) / batches.length) * 65);
+    if (householdId) await saveMerchantCache(householdId, cacheEntries).catch(() => {});
+    onProgress?.(30 + ((b + BATCH) / uncachedIndices.length) * 65);
   }
 
   onProgress?.(100);
   return results;
 };
 
-// Simple keyword fallback (no AI needed for obvious ones)
-const guessCategory = (desc: string): string => {
-  const d = desc.toLowerCase();
-  if (/woolworths|coles|aldi|iga|costco|harris farm/.test(d)) return 'groceries';
-  if (/mcdonald|kfc|hungry|domino|pizza|cafe|restaurant|uber eat|doordash/.test(d)) return 'dining';
-  if (/uber|lyft|taxi|train|bus|transport|toll|opal|parking|petrol|bp |shell|caltex/.test(d)) return 'transport';
-  if (/netflix|spotify|amazon|prime|disney|youtube|hulu|stan|foxtel|apple tv/.test(d)) return 'subscription';
-  if (/gym|fitness|sport|swim|tennis/.test(d)) return 'health';
-  if (/chemist|pharmacy|doctor|dentist|hospital|medical/.test(d)) return 'health';
-  if (/electricity|water|gas|internet|phone|nbn|optus|telstra|vodafone/.test(d)) return 'utilities';
-  if (/rent|lease|strata|landlord/.test(d)) return 'rent';
-  if (/amazon|ebay|kmart|target|big w|myer|david jones/.test(d)) return 'shopping';
-  if (/insurance|aami|nrma|budget direct/.test(d)) return 'insurance';
-  return 'other';
-};
-
 // ============================================================
-// SMART PDF PARSER (replaces old parsePDF)
-// 1. Extract text client-side with pdfjs-dist (free)
-// 2. Parse transactions with regex (free)
-// 3. Only if regex fails → send TEXT (not PDF binary) to Gemini (cheap)
+// SMART PDF PARSER  (Gemini 2.5 Flash, 3-page text chunks)
+//
+// Pipeline:
+//  1. pdfjs-dist  → extract text per page, Y/X sorted (free, ~0.5s/page)
+//  2. Gemini 2.5 Flash → parse 3 pages of TEXT at a time (not PDF binary)
+//     • ~$0.001 for 20-page statement vs ~$0.05+ for PDF binary
+//  3. Dedup cross-chunk boundary duplicates (same date+amount+merchant)
+//  4. batchCategorizeWithCache for categories (cache-first)
 // ============================================================
 export const parsePDFSmart = async (
   file: File,
-  onProgress?: (pct: number, status: string) => void
+  onProgress?: (pct: number, status: string, found?: number) => void
 ): Promise<BankTransaction[]> => {
-  onProgress?.(5, 'Extracting text from PDF…');
+  onProgress?.(3, 'Extracting text from PDF…');
 
   let pages: string[] = [];
-  let fullText = '';
-
   try {
     const extracted = await extractPDFText(file);
     pages = extracted.pages;
-    fullText = extracted.fullText;
-    onProgress?.(30, `Extracted ${pages.length} pages`);
-  } catch (e) {
-    onProgress?.(30, 'Text extraction failed, trying AI…');
+    onProgress?.(20, `${pages.length} pages extracted — reading transactions…`, 0);
+  } catch {
+    throw new Error('Could not read PDF. Try a different file or check it is not password-protected.');
   }
 
-  // Try regex parser first (free)
-  if (fullText) {
-    const regexTxs = parseTransactionsFromText(fullText);
-    if (regexTxs.length >= 5) {
-      onProgress?.(90, `Found ${regexTxs.length} transactions via text`);
-      return regexTxs;
-    }
-  }
-
-  // Fallback: send TEXT to Gemini (much cheaper than PDF binary)
   const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
-  if (!apiKey) throw new Error('Could not parse PDF — add VITE_GEMINI_API_KEY for AI parsing');
+  if (!apiKey) throw new Error('Add VITE_GEMINI_API_KEY in your .env to parse PDF statements.');
 
-  onProgress?.(40, 'Sending text to AI for parsing…');
+  const { GoogleGenAI } = await import('@google/genai');
+  const ai = new GoogleGenAI({ apiKey });
 
-  const { GoogleGenerativeAI } = await import('@google/generative-ai');
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite' }); // cheapest text model
+  const CHUNK = 3; // pages per AI call
+  const allTxs: BankTransaction[] = [];
+  const seen = new Set<string>(); // dedup key: date+amount+first20chars
 
-  // If text extraction failed, send PDF as last resort — but in 3-page chunks
-  let allTransactions: BankTransaction[] = [];
+  for (let i = 0; i < pages.length; i += CHUNK) {
+    const chunk = pages.slice(i, i + CHUNK);
+    const chunkText = chunk.join('\n\n--- PAGE BREAK ---\n\n');
+    const pct = 20 + ((i / pages.length) * 70);
+    onProgress?.(pct, `Analysing pages ${i + 1}–${Math.min(i + CHUNK, pages.length)} of ${pages.length}…`, allTxs.length);
 
-  if (!fullText && pages.length === 0) {
-    // True last resort: send the actual PDF
-    onProgress?.(50, 'Parsing PDF with AI…');
-    const arrayBuffer = await file.arrayBuffer();
-    const bytes = new Uint8Array(arrayBuffer);
-    let binary = '';
-    bytes.forEach(b => (binary += String.fromCharCode(b)));
-    const base64 = btoa(binary);
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-preview-04-17',
+        contents: [{
+          role: 'user',
+          parts: [{ text: `You are an expert Australian bank statement parser.
+Extract EVERY transaction from this bank statement text. Be thorough — do not skip any lines.
 
-    const result = await model.generateContent([
-      { inlineData: { mimeType: 'application/pdf', data: base64 } },
-      `Extract ALL bank transactions as JSON array. No markdown. Format: [{"date":"YYYY-MM-DD","description":"string","amount":-45.50,"type":"debit"}]. Negative amounts = expenses.`,
-    ]);
-    const raw = result.response.text().replace(/```json\n?/g, '').replace(/```/g, '').trim();
-    const parsed: any[] = JSON.parse(raw);
-    allTransactions = parsed.map((tx: any, i: number) => {
-      const type: 'debit' | 'credit' = tx.amount < 0 ? 'debit' : 'credit';
-      const t: BankTransaction = {
-        id: `pdf-${i}`, date: parseDate(tx.date), description: tx.description,
-        cleanDescription: cleanDesc(tx.description), amount: tx.amount,
-        balance: tx.balance, type, bankSource: 'pdf-ai', rawRow: JSON.stringify(tx),
-      };
-      if (type === 'credit') t.incomeType = detectIncomeType(tx.description);
-      return t;
-    });
-  } else {
-    // Send text in page-group chunks (3 pages at a time) to Gemini
-    const CHUNK_SIZE = 3;
-    for (let i = 0; i < pages.length; i += CHUNK_SIZE) {
-      const chunk = pages.slice(i, i + CHUNK_SIZE).join('\n');
-      onProgress?.(40 + (i / pages.length) * 50, `Processing pages ${i + 1}–${Math.min(i + CHUNK_SIZE, pages.length)}…`);
-      try {
-        const result = await model.generateContent(
-          `Extract bank transactions from this bank statement text. Return ONLY a JSON array, no markdown:
-[{"date":"YYYY-MM-DD","description":"string","amount":-45.50,"type":"debit"}]
-Rules: negative amounts=expenses, positive=income. Skip totals/summaries/headers.
-TEXT:
-${chunk.substring(0, 8000)}`
-        );
-        const raw = result.response.text().replace(/```json\n?/g, '').replace(/```/g, '').trim();
-        const parsed: any[] = JSON.parse(raw);
-        const chunkTxs = parsed.map((tx: any, j: number) => {
-          const type: 'debit' | 'credit' = tx.amount < 0 ? 'debit' : 'credit';
-          const t: BankTransaction = {
-            id: `pdf-chunk${i}-${j}`, date: parseDate(tx.date), description: tx.description,
-            cleanDescription: cleanDesc(tx.description), amount: tx.amount,
-            balance: tx.balance, type, bankSource: 'pdf-ai-text', rawRow: JSON.stringify(tx),
-          };
-          if (type === 'credit') t.incomeType = detectIncomeType(tx.description);
-          return t;
-        });
-        allTransactions.push(...chunkTxs);
-      } catch { /* skip failed chunk */ }
+Rules:
+- "debit" = money OUT (purchases, bills, withdrawals, fees)
+- "credit" = money IN (salary, refunds, transfers received, interest)
+- amount is always a positive number
+- date format: YYYY-MM-DD
+- If a line shows a debit column AND credit column, use whichever has the value
+- Skip: page headers, account summaries, opening/closing balances, column headings
+
+Return ONLY a valid JSON array, no markdown, no explanation:
+[{"date":"YYYY-MM-DD","description":"MERCHANT NAME","amount":45.60,"type":"debit","balance":1234.56}]
+
+STATEMENT TEXT:
+${chunkText.substring(0, 15000)}` }]
+        }],
+        config: { temperature: 0 },
+      });
+
+      const raw = (response.text ?? '').replace(/```json\n?/g, '').replace(/```/g, '').trim();
+      // Sometimes model wraps in an object — try to extract the array
+      const jsonStr = raw.startsWith('[') ? raw : (raw.match(/\[[\s\S]*\]/)?.[0] ?? '[]');
+      const parsed: any[] = JSON.parse(jsonStr);
+
+      for (let j = 0; j < parsed.length; j++) {
+        const tx = parsed[j];
+        if (!tx.date || tx.amount == null) continue;
+        const amt = Math.abs(Number(tx.amount));
+        if (!isFinite(amt) || amt < 0.01) continue;
+
+        const type: 'debit' | 'credit' = (tx.type === 'credit') ? 'credit' : 'debit';
+        const dupKey = `${tx.date}|${amt.toFixed(2)}|${String(tx.description).substring(0, 20).toLowerCase()}`;
+        if (seen.has(dupKey)) continue;
+        seen.add(dupKey);
+
+        const t: BankTransaction = {
+          id: `pdf-${i}-${j}`,
+          date: parseDate(tx.date),
+          description: tx.description ?? '',
+          cleanDescription: cleanDesc(tx.description ?? ''),
+          amount: type === 'credit' ? amt : -amt,
+          balance: tx.balance != null ? Math.abs(Number(tx.balance)) : undefined,
+          type,
+          bankSource: 'pdf-ai',
+          rawRow: JSON.stringify(tx),
+        };
+        if (type === 'credit') t.incomeType = detectIncomeType(tx.description ?? '');
+        allTxs.push(t);
+      }
+    } catch (e) {
+      console.warn(`Chunk pages ${i + 1}–${i + CHUNK} failed:`, e);
+      // Continue with remaining chunks — partial import beats total failure
     }
   }
 
-  onProgress?.(95, `Parsed ${allTransactions.length} transactions`);
-  return allTransactions;
+  onProgress?.(95, `Found ${allTxs.length} transactions — sorting…`, allTxs.length);
+  allTxs.sort((a, b) => b.date.getTime() - a.date.getTime());
+  return allTxs;
 };
 
-// Keep old parsePDF as alias for backward compat
+// Backward-compat alias
 export const parsePDF = parsePDFSmart;
 
 // ============================================================
