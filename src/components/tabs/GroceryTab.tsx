@@ -1,19 +1,20 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Check } from 'lucide-react';
-import { 
-  collection, 
-  query, 
-  onSnapshot, 
-  addDoc, 
-  updateDoc, 
-  deleteDoc, 
-  doc, 
-  serverTimestamp, 
+import {
+  collection,
+  query,
+  onSnapshot,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  doc,
+  serverTimestamp,
   orderBy,
   getDocs,
   Timestamp
 } from 'firebase/firestore';
+import { differenceInDays } from 'date-fns';
 import { db } from '../../firebase';
 import { useAuth } from '../AuthWrapper';
 import PageTransition from '../ui/PageTransition';
@@ -367,15 +368,72 @@ export default function GroceryTab({ onBack }: { onBack?: () => void }) {
       .map(([name, data]) => ({ name, category: data.category }));
   }, [history, activeItems]);
 
-  const prediction = useMemo(() => {
-    // Simple prediction: if milk added 4 times in last 30 days
-    const milkHistory = history.filter(i => i.name.toLowerCase() === 'milk');
-    if (milkHistory.length >= 4) {
-      const alreadyOnList = activeItems.some(i => i.name.toLowerCase() === 'milk');
-      if (!alreadyOnList) return 'Milk';
-    }
-    return null;
+  // Feature 9: Items bought EVERY week over last 4+ weeks but not yet on this week's list
+  const weeklyPatterns = useMemo(() => {
+    if (history.length === 0) return [];
+    const now = new Date();
+    const currentNames = new Set(activeItems.map(i => i.name.toLowerCase()));
+
+    // Group completed history into ISO week strings
+    const byItemByWeek: Record<string, Set<string>> = {};
+    history.forEach(item => {
+      const createdAt = item.createdAt instanceof Timestamp
+        ? item.createdAt.toDate()
+        : new Date(item.createdAt || 0);
+      const weeksAgo = Math.floor(differenceInDays(now, createdAt) / 7);
+      if (weeksAgo > 8) return; // Only look back 8 weeks
+      const weekKey = `w${weeksAgo}`;
+      const nameKey = item.name.toLowerCase();
+      if (!byItemByWeek[nameKey]) byItemByWeek[nameKey] = new Set();
+      byItemByWeek[nameKey].add(weekKey);
+    });
+
+    // Find items that appear in 3+ of the last 4 weeks (excluding current week w0)
+    const recentWeeks = ['w1', 'w2', 'w3', 'w4'];
+    return Object.entries(byItemByWeek)
+      .filter(([name, weeks]) => {
+        const matches = recentWeeks.filter(w => weeks.has(w)).length;
+        return matches >= 3 && !currentNames.has(name);
+      })
+      .map(([name]) => {
+        // Find original casing + category from history
+        const orig = history.find(i => i.name.toLowerCase() === name);
+        return { name: orig?.name || name, category: orig?.category || 'Other' };
+      })
+      .slice(0, 4);
   }, [history, activeItems]);
+
+  // Feature 6: Grocery run predictor — avg days between shop visits (any receipt completing 3+ items)
+  const groceryRunPrediction = useMemo(() => {
+    // Detect "shop runs" as days where 3+ items were completed together
+    const completionDates: Date[] = [];
+    const byDate: Record<string, number> = {};
+    history.forEach(item => {
+      if (!item.completedAt) return;
+      const dt = item.completedAt instanceof Timestamp
+        ? item.completedAt.toDate()
+        : new Date(item.completedAt);
+      const key = dt.toISOString().slice(0, 10);
+      byDate[key] = (byDate[key] || 0) + 1;
+    });
+    Object.entries(byDate).forEach(([dateStr, count]) => {
+      if (count >= 2) completionDates.push(new Date(dateStr));
+    });
+
+    if (completionDates.length < 2) return null;
+    completionDates.sort((a, b) => a.getTime() - b.getTime());
+
+    // Average interval
+    const intervals: number[] = [];
+    for (let i = 1; i < completionDates.length; i++) {
+      intervals.push(differenceInDays(completionDates[i], completionDates[i - 1]));
+    }
+    const avgInterval = Math.round(intervals.reduce((a, b) => a + b, 0) / intervals.length);
+    const lastShop = completionDates[completionDates.length - 1];
+    const daysSinceLast = differenceInDays(new Date(), lastShop);
+
+    return { avgInterval, daysSinceLast, lastShop };
+  }, [history]);
 
   const groupedActive = useMemo(() => {
     const groups: Record<string, GroceryItemData[]> = {};
@@ -508,21 +566,51 @@ export default function GroceryTab({ onBack }: { onBack?: () => void }) {
           </div>
         )}
 
-        {/* Prediction Banner */}
-        {prediction && (
-          <motion.div 
+        {/* Grocery Run Predictor — Feature 6 */}
+        {groceryRunPrediction && (
+          <motion.div
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
-            className="mx-8 mb-8 p-4 bg-[#F0E4CC] border border-[#B8955A]/20 rounded-2xl flex items-center justify-between gap-4"
+            className="mx-8 mb-4 p-4 bg-[#EDE8DF] border border-[#D4CEC4] rounded-2xl flex items-center gap-3"
           >
-            <p className="font-outfit text-[13px] text-[#6B6560]">You usually buy <span className="text-[#1A1A1A] font-medium">{prediction}</span> around now</p>
-            <button 
-              onClick={() => addItem(prediction, '', 'Other')}
-              className="px-4 py-1.5 bg-[#1A1A1A] text-white rounded-full font-outfit text-[12px] font-medium"
-            >
-              Add
-            </button>
+            <span className="text-[22px] flex-shrink-0">🛒</span>
+            <div>
+              <p className="font-outfit text-[13px] font-medium text-[#1A1A1A]">
+                {groceryRunPrediction.daysSinceLast >= groceryRunPrediction.avgInterval
+                  ? `You're due for a shop run`
+                  : `Shop run in ~${groceryRunPrediction.avgInterval - groceryRunPrediction.daysSinceLast} day${groceryRunPrediction.avgInterval - groceryRunPrediction.daysSinceLast !== 1 ? 's' : ''}`}
+              </p>
+              <p className="font-outfit text-[11px] text-[#6B6560] mt-0.5">
+                You usually shop every {groceryRunPrediction.avgInterval} days · last was {groceryRunPrediction.daysSinceLast}d ago
+              </p>
+            </div>
           </motion.div>
+        )}
+
+        {/* Weekly Pattern Suggestions — Feature 9 */}
+        {weeklyPatterns.length > 0 && (
+          <div className="mx-8 mb-6">
+            <label className="block font-outfit text-[12px] uppercase tracking-[0.2em] text-[#B8955A] mb-3">You always buy</label>
+            <div className="flex gap-2 flex-wrap">
+              <AnimatePresence mode="popLayout">
+                {weeklyPatterns.map(item => (
+                  <motion.button
+                    key={item.name}
+                    initial={{ scale: 0 }}
+                    animate={{ scale: 1 }}
+                    exit={{ scale: 0 }}
+                    transition={{ type: "spring", stiffness: 400, damping: 25 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={() => addItem(item.name, '', item.category)}
+                    className="px-4 py-2 bg-[#F0E4CC] border border-[#B8955A]/30 rounded-full font-outfit text-[13px] text-[#1A1A1A] flex items-center gap-1.5"
+                  >
+                    <span className="text-[#B8955A] text-[11px]">↩</span>
+                    {item.name}
+                  </motion.button>
+                ))}
+              </AnimatePresence>
+            </div>
+          </div>
         )}
 
         {/* List Content */}
