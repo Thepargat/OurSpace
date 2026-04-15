@@ -212,27 +212,12 @@ const regexParsePage = (text: string): Array<{ date: string; description: string
 };
 
 /**
- * Call Gemini with exponential backoff.
- * Retries on rate limits (429), network errors, and bad JSON.
- * Returns parsed transaction array (may be empty — never throws after maxAttempts).
+ * Call Gemini. 2 attempts max — a 5s wait on the first failure.
+ * Never throws. Returns [] if both attempts produce nothing.
  */
-const geminiRobust = async (
-  ai: any,
-  prompt: string,
-  maxAttempts = 4
-): Promise<any[]> => {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    if (attempt > 0) {
-      const errStr = String(lastError);
-      const isRateLimit = errStr.includes('429') || errStr.includes('quota') || errStr.includes('RESOURCE_EXHAUSTED');
-      // Rate limits: longer backoff; other errors: shorter
-      const backoffMs = isRateLimit
-        ? Math.pow(2, attempt) * 15_000   // 30s, 60s, 120s
-        : Math.pow(2, attempt) * 1_500;   // 3s, 6s, 12s
-      console.warn(`[bankImport] retry ${attempt}/${maxAttempts} in ${backoffMs}ms`);
-      await sleep(backoffMs);
-    }
+const geminiCall = async (ai: any, prompt: string): Promise<any[]> => {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) await sleep(5_000);
     try {
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash-preview-04-17',
@@ -240,14 +225,12 @@ const geminiRobust = async (
         config: { temperature: 0 },
       });
       const txs = extractJSON(response.text ?? '');
-      if (Array.isArray(txs)) return txs;
-      lastError = new Error('No JSON array in response');
+      if (txs.length > 0) return txs;
     } catch (e) {
-      lastError = e;
+      console.warn(`[bankImport] gemini attempt ${attempt + 1} error:`, e);
     }
   }
-  console.warn('[bankImport] gemini gave up after', maxAttempts, 'attempts:', lastError);
-  return [];   // never fail the caller — return empty, let regex pick up
+  return [];
 };
 
 const GEMINI_PROMPT = (chunkText: string) => `You are an expert Australian bank statement parser.
@@ -375,14 +358,18 @@ export const startBankImport = async (
 // ── 2. Background AI processor ──────────────────────────────────────────────
 
 /**
- * Processes un-parsed pages with Gemini 2.5 Flash.
- * Strategy per chunk of 3 pages:
- *   1. Try all 3 pages together (best quality, 4 retries with backoff)
- *   2. If chunk fails → try each page individually (2 retries each)
- *   3. If single page fails → regex fallback (AU bank statement patterns)
- *   4. If regex also gives 0 results → page is genuinely blank / cover page
- *      → mark as processed (not failed), since we did our best
- * Result: failedPages is always empty unless page text was missing from Firestore.
+ * ONE Gemini call for the entire statement.
+ *
+ * Gemini 2.5 Flash has a 1M token context. A full 20-page bank statement
+ * is ~5,000-15,000 tokens — trivially small. Sending everything in one call
+ * costs ~$0.001 and takes 15-30s. The old per-chunk approach was making
+ * 7+ calls, triggering rate limits, then waiting 30s/60s/120s in backoff
+ * loops = 30 minutes for one statement.
+ *
+ * Flow:
+ *   1. Send ALL page text in one Gemini call (2 attempts, 5s gap)
+ *   2. If AI returns nothing → regex fallback across all pages
+ *   3. Concurrency guard: if already running (processingStartedAt < 10min ago), skip
  */
 export const processImportInBackground = async (
   importId: string,
@@ -395,11 +382,21 @@ export const processImportInBackground = async (
   if (!importSnap.exists()) return;
   const importData = importSnap.data();
 
+  // Concurrency guard — prevent duplicate runs from resumeUnfinishedImports
+  const startedAt = importData.processingStartedAt as Timestamp | null;
+  if (startedAt) {
+    const ageMs = Date.now() - (startedAt.toMillis?.() ?? 0);
+    if (ageMs < 10 * 60 * 1000) {
+      console.info('[bankImport] already running, skipping duplicate');
+      return;
+    }
+  }
+  await updateDoc(doc(db, importPath), { processingStartedAt: serverTimestamp() });
+
   const processedPages: number[] = importData.processedPages ?? [];
-  const failedPages: number[] = importData.failedPages ?? [];
   const totalPages: number = importData.totalPages ?? 0;
 
-  // Load page texts
+  // Load page texts from memory (first run) or Firestore (resumed run)
   let pages: string[] = pagesArg ?? [];
   if (pages.length === 0) {
     const pageDocs = await getDocs(collection(db, `${importPath}/pages`));
@@ -410,104 +407,51 @@ export const processImportInBackground = async (
     });
   }
 
-  // Exclude already-processed AND already-failed pages
-  // (failed pages only re-enter via explicit retryFailedPages())
-  const skipSet = new Set([...processedPages, ...failedPages]);
-  const toProcess = Array.from({ length: totalPages }, (_, i) => i).filter(i => !skipSet.has(i));
+  // Only process pages not already done
+  const toProcess = Array.from({ length: totalPages }, (_, i) => i)
+    .filter(i => !processedPages.includes(i));
 
   if (toProcess.length === 0) {
     await categoriseImport(importId, householdId);
     return;
   }
 
-  const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY as string | undefined;
+  // Build one big text block — all pages combined
+  const allText = toProcess
+    .map(idx => `=== PAGE ${idx + 1} ===\n${pages[idx]}`)
+    .join('\n\n');
 
-  // Without API key, try regex on every page before giving up
-  if (!apiKey) {
-    const newProcessed = [...processedPages];
-    const seenKeys = new Set<string>();
-    for (const idx of toProcess) {
-      const txs = regexParsePage(pages[idx]);
-      await saveTxBatch(txs, importPath, importId, idx, seenKeys);
-      newProcessed.push(idx);
-    }
-    await updateDoc(doc(db, importPath), {
-      processedPages: newProcessed,
-      status: 'needs_review' as ImportStatus,
-      updatedAt: serverTimestamp(),
-    });
-    await categoriseImport(importId, householdId);
-    return;
-  }
-
-  const { GoogleGenAI } = await import('@google/genai');
-  const ai = new GoogleGenAI({ apiKey });
-
-  const CHUNK = 3;
-  const newProcessed = [...processedPages];
-  const newFailed = [...failedPages];
   const seenKeys = new Set<string>();
+  let txs: any[] = [];
 
-  for (let i = 0; i < toProcess.length; i += CHUNK) {
-    const chunkIndices = toProcess.slice(i, i + CHUNK);
+  const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY as string | undefined;
+  if (apiKey) {
+    const { GoogleGenAI } = await import('@google/genai');
+    const ai = new GoogleGenAI({ apiKey });
 
-    // ── Step 1: Try the full chunk with 4-attempt retry ──────────────────────
-    const chunkText = chunkIndices
-      .map(idx => `=== PAGE ${idx + 1} ===\n${pages[idx]}`)
-      .join('\n\n');
+    // ONE call for the whole statement. If it returns nothing, try once more.
+    txs = await geminiCall(ai, GEMINI_PROMPT(allText));
 
-    // Gemini 2.5 Flash context = 1M tokens; ~4 chars/token → 20k chars ≈ 5k tokens
-    // Use up to 24k chars per chunk — more than enough for 3 dense statement pages
-    const safeText = chunkText.length > 24_000 ? chunkText.slice(0, 24_000) : chunkText;
-
-    let chunkTxs = await geminiRobust(ai, GEMINI_PROMPT(safeText), 4);
-
-    if (chunkTxs.length > 0) {
-      // Chunk succeeded
-      await saveTxBatch(chunkTxs, importPath, importId, chunkIndices[0], seenKeys);
-      newProcessed.push(...chunkIndices);
-      await updateDoc(doc(db, importPath), {
-        processedPages: newProcessed,
-        failedPages: newFailed,
-        updatedAt: serverTimestamp(),
-      });
-    } else {
-      // ── Step 2: Chunk returned nothing — try pages individually ─────────────
-      for (const idx of chunkIndices) {
-        const pageText = pages[idx];
-        const safePageText = pageText.length > 10_000 ? pageText.slice(0, 10_000) : pageText;
-
-        let pageTxs = await geminiRobust(ai, GEMINI_PROMPT(`=== PAGE ${idx + 1} ===\n${safePageText}`), 2);
-
-        if (pageTxs.length === 0) {
-          // ── Step 3: AI gave nothing → try regex fallback ─────────────────────
-          pageTxs = regexParsePage(pageText);
-          if (pageTxs.length > 0) {
-            console.info(`[bankImport] page ${idx} recovered via regex (${pageTxs.length} txs)`);
-          }
-        }
-
-        // Step 4: 0 results from both AI and regex = blank/cover page
-        // Still mark as processed — it's not a failure, just an empty page.
-        await saveTxBatch(pageTxs, importPath, importId, idx, seenKeys);
-        newProcessed.push(idx);
-
-        await updateDoc(doc(db, importPath), {
-          processedPages: newProcessed,
-          failedPages: newFailed,
-          updatedAt: serverTimestamp(),
-        });
-
-        // Small courtesy delay between individual page calls to avoid rate limits
-        await sleep(400);
-      }
+    // If AI returned nothing (empty pages / bad response) → regex fallback
+    if (txs.length === 0) {
+      console.info('[bankImport] AI returned 0 txs — falling back to regex');
+      for (const idx of toProcess) txs.push(...regexParsePage(pages[idx]));
     }
-
-    // Courtesy delay between chunk calls (rate limit protection)
-    if (i + CHUNK < toProcess.length) await sleep(600);
+  } else {
+    // No API key — regex only
+    for (const idx of toProcess) txs.push(...regexParsePage(pages[idx]));
   }
 
-  // All pages attempted — move to categorisation
+  await saveTxBatch(txs, importPath, importId, 0, seenKeys);
+
+  // Mark all pages processed, clear the lock
+  await updateDoc(doc(db, importPath), {
+    processedPages: [...new Set([...processedPages, ...toProcess])],
+    failedPages: [],
+    processingStartedAt: null,
+    updatedAt: serverTimestamp(),
+  });
+
   await categoriseImport(importId, householdId);
 };
 
