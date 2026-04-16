@@ -26,6 +26,9 @@ import { categorizeItem } from '../../lib/categorization';
 import { useCurrencyCountUp, SPRING_DEFAULT, SPRING_BOUNCY, haptic, fireCelebration } from '../../lib/motion';
 import { buildMonthlyAggregates, forecastCategories, calculateBudgetHealth, calculateSpendVelocity, detectRecurringTransactions, calculateSavingsMomentum, formatAUD, formatCompact } from '../../lib/cashflow';
 import BankImportFlow from '../finance/BankImportFlow';
+import BankImportReview from '../finance/BankImportReview';
+import { resumeUnfinishedImports } from '../../lib/bankImport';
+import type { BankImport } from '../../lib/bankImport';
 
 // ============================================================
 // TYPES
@@ -1026,6 +1029,9 @@ export default function FinancesTab() {
   // Pending receipt scans (status: 'scanning' | 'pending_review' | 'scan_failed')
   const [pendingScans, setPendingScans] = useState<any[]>([]);
   const [reviewingExpense, setReviewingExpense] = useState<any | null>(null);
+  // Bank imports
+  const [bankImports, setBankImports] = useState<BankImport[]>([]);
+  const [reviewingImport, setReviewingImport] = useState<BankImport | null>(null);
   // Manual expense form
   const [manualMerchant, setManualMerchant] = useState('');
   const [manualAmount, setManualAmount] = useState('');
@@ -1100,7 +1106,20 @@ export default function FinancesTab() {
       snap => setSavingsGoals(snap.docs.map(d => ({ id: d.id, ...d.data() })))
     );
 
-    return () => { unsubExpenses(); unsubBank(); unsubGoals(); };
+    const unsubImports = onSnapshot(
+      query(collection(db, `households/${householdId}/bankImports`), orderBy('createdAt', 'desc')),
+      snap => {
+        const imports = snap.docs.map(d => ({ id: d.id, ...d.data() } as BankImport));
+        setBankImports(imports);
+        // Resume any stuck imports automatically
+        const needsResume = imports.some(i =>
+          i.status === 'extracting' || i.status === 'ai_parsing' || i.status === 'categorising'
+        );
+        if (needsResume) resumeUnfinishedImports(householdId).catch(console.warn);
+      }
+    );
+
+    return () => { unsubExpenses(); unsubBank(); unsubGoals(); unsubImports(); };
   }, [householdId]);
 
   // Load budget + income from household (set in Settings)
@@ -1129,7 +1148,13 @@ export default function FinancesTab() {
   }, [viewMonth]);
 
   const monthExpenses = useMemo(() =>
-    expenses.filter(e => e.budgetMonth === monthKey),
+    expenses.filter(e => {
+      // Use actual expense date as primary source of truth (budgetMonth was stored
+      // incorrectly by old code — "today" instead of the receipt's date).
+      // Fall back to budgetMonth only if date is missing/invalid.
+      const dateMonth = format(e.date, 'yyyy-MM');
+      return dateMonth === monthKey;
+    }),
     [expenses, monthKey]
   );
 
@@ -1149,9 +1174,9 @@ export default function FinancesTab() {
     return bankIncome > 0 ? bankIncome : monthlyIncomeOverride;
   }, [bankTransactions, monthKey, monthlyIncomeOverride]);
 
-  // Year-level aggregates for year view
+  // Year-level aggregates for year view — use actual date, same as monthExpenses
   const yearExpenses = useMemo(() =>
-    expenses.filter(e => e.budgetMonth?.startsWith(String(viewYear))),
+    expenses.filter(e => e.date.getFullYear() === viewYear),
     [expenses, viewYear]
   );
 
@@ -1162,8 +1187,10 @@ export default function FinancesTab() {
 
   const yearMonthlyTotals = useMemo(() => {
     const months = Array.from({ length: 12 }, (_, i) => {
-      const key = `${viewYear}-${String(i + 1).padStart(2, '0')}`;
-      const total = expenses.filter(e => e.budgetMonth === key).reduce((s, e) => s + e.total, 0);
+      // Filter by actual date (month index i, year viewYear)
+      const total = expenses
+        .filter(e => e.date.getFullYear() === viewYear && e.date.getMonth() === i)
+        .reduce((s, e) => s + e.total, 0);
       return { month: i, label: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][i], total };
     });
     return months;
@@ -1425,6 +1452,44 @@ export default function FinancesTab() {
           </motion.button>
         </div>
       )}
+
+      {/* Bank import banners */}
+      {activeTab === 'overview' && bankImports.filter(i => i.status === 'ai_parsing' || i.status === 'extracting' || i.status === 'categorising').map(imp => (
+        <div key={imp.id} className="px-5 mb-2">
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="w-full flex items-center gap-3 bg-[#FFF8F0] border border-[#B8955A]/40 rounded-[18px] px-4 py-3"
+          >
+            <Loader2 size={16} className="text-[#B8955A] flex-shrink-0 animate-spin" />
+            <p className="font-outfit text-[13px] text-[#B8955A] font-medium flex-1 text-left">
+              Gemini is reading your bank statement…
+            </p>
+          </motion.div>
+        </div>
+      ))}
+      {activeTab === 'overview' && bankImports.filter(i => i.status === 'needs_review' || i.status === 'partially_failed').map(imp => (
+        <div key={imp.id} className="px-5 mb-2">
+          <motion.button
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            whileTap={{ scale: 0.98 }}
+            onClick={() => setReviewingImport(imp)}
+            className="w-full flex items-center gap-3 bg-[#FFF8F0] border border-[#B8955A]/40 rounded-[18px] px-4 py-3"
+          >
+            <Eye size={16} className="text-[#B8955A] flex-shrink-0" />
+            <p className="font-outfit text-[13px] text-[#B8955A] font-medium flex-1 text-left">
+              {imp.status === 'partially_failed'
+                ? `Bank statement ready · ${imp.failedPages?.length ?? 0} page${imp.failedPages?.length !== 1 ? 's' : ''} failed`
+                : `Bank statement ready to review`
+              }
+            </p>
+            <span className="font-outfit text-[12px] text-[#B8955A] bg-[#B8955A]/15 px-2 py-0.5 rounded-full">
+              Review
+            </span>
+          </motion.button>
+        </div>
+      ))}
 
       <AnimatePresence mode="wait">
 
@@ -2235,8 +2300,21 @@ export default function FinancesTab() {
         {showBankImport && (
           <BankImportFlow
             onClose={() => setShowBankImport(false)}
-            onImported={(count) => {
+            onStarted={() => {
               setShowBankImport(false);
+            }}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Bank import review */}
+      <AnimatePresence>
+        {reviewingImport && (
+          <BankImportReview
+            bankImport={reviewingImport}
+            onClose={() => setReviewingImport(null)}
+            onConfirmed={(count) => {
+              setReviewingImport(null);
               if (count > 0) fireCelebration({ x: 0.5, y: 0.8 });
             }}
           />
@@ -2248,7 +2326,7 @@ export default function FinancesTab() {
         {drillDownCat && (
           <CategoryDrillDown
             category={drillDownCat}
-            expenses={expenses}
+            expenses={monthExpenses}
             onBack={() => setDrillDownCat(null)}
           />
         )}
