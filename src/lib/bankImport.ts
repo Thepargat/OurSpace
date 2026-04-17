@@ -38,7 +38,7 @@ import {
 import {
   doc, collection, addDoc, updateDoc, setDoc,
   getDocs, getDoc, query, orderBy, serverTimestamp,
-  writeBatch, Timestamp,
+  writeBatch, Timestamp, deleteDoc,
 } from 'firebase/firestore';
 import { extractPDFText, batchCategorizeWithCache } from './bankParsers';
 import { detectIncomeType } from './cashflow';
@@ -654,4 +654,32 @@ export const confirmImportTransactions = async (
   });
 
   return confirmed;
+};
+
+// ── 7. Delete import (dismiss stuck / unwanted jobs) ────────────────────────
+
+export const deleteImport = async (
+  importId: string,
+  householdId: string
+): Promise<void> => {
+  const importPath = `households/${householdId}/bankImports/${importId}`;
+
+  // Delete sub-collections first (Firestore doesn't cascade)
+  const deleteSubCollection = async (subCol: string) => {
+    const snap = await getDocs(collection(db, `${importPath}/${subCol}`));
+    if (snap.empty) return;
+    // Firestore writeBatch max 500 ops
+    for (let i = 0; i < snap.docs.length; i += 400) {
+      const batch = writeBatch(db);
+      snap.docs.slice(i, i + 400).forEach(d => batch.delete(d.ref));
+      await batch.commit();
+    }
+  };
+
+  await Promise.all([
+    deleteSubCollection('pages'),
+    deleteSubCollection('rawTransactions'),
+  ]);
+
+  await deleteDoc(doc(db, importPath));
 };

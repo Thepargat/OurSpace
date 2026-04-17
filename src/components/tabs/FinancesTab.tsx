@@ -27,7 +27,7 @@ import { useCurrencyCountUp, SPRING_DEFAULT, SPRING_BOUNCY, haptic, fireCelebrat
 import { buildMonthlyAggregates, forecastCategories, calculateBudgetHealth, calculateSpendVelocity, detectRecurringTransactions, calculateSavingsMomentum, formatAUD, formatCompact } from '../../lib/cashflow';
 import BankImportFlow from '../finance/BankImportFlow';
 import BankImportReview from '../finance/BankImportReview';
-import { resumeUnfinishedImports } from '../../lib/bankImport';
+import { resumeUnfinishedImports, deleteImport } from '../../lib/bankImport';
 import type { BankImport } from '../../lib/bankImport';
 
 // ============================================================
@@ -1463,31 +1463,50 @@ export default function FinancesTab() {
           >
             <Loader2 size={16} className="text-[#B8955A] flex-shrink-0 animate-spin" />
             <p className="font-outfit text-[13px] text-[#B8955A] font-medium flex-1 text-left">
-              Gemini is reading your bank statement…
+              {imp.fileName ? `${imp.fileName} — reading…` : 'Gemini is reading your bank statement…'}
             </p>
+            <button
+              onClick={() => deleteImport(imp.id, householdId!).catch(console.warn)}
+              className="w-7 h-7 rounded-full bg-[#B8955A]/15 flex items-center justify-center flex-shrink-0"
+            >
+              <X size={13} className="text-[#B8955A]" />
+            </button>
           </motion.div>
         </div>
       ))}
       {activeTab === 'overview' && bankImports.filter(i => i.status === 'needs_review' || i.status === 'partially_failed').map(imp => (
         <div key={imp.id} className="px-5 mb-2">
-          <motion.button
+          <motion.div
             initial={{ opacity: 0, y: -8 }}
             animate={{ opacity: 1, y: 0 }}
-            whileTap={{ scale: 0.98 }}
-            onClick={() => setReviewingImport(imp)}
             className="w-full flex items-center gap-3 bg-[#FFF8F0] border border-[#B8955A]/40 rounded-[18px] px-4 py-3"
           >
             <Eye size={16} className="text-[#B8955A] flex-shrink-0" />
-            <p className="font-outfit text-[13px] text-[#B8955A] font-medium flex-1 text-left">
+            <motion.button
+              whileTap={{ scale: 0.97 }}
+              onClick={() => setReviewingImport(imp)}
+              className="font-outfit text-[13px] text-[#B8955A] font-medium flex-1 text-left"
+            >
+              {imp.fileName ? `${imp.fileName} — ` : ''}
               {imp.status === 'partially_failed'
-                ? `Bank statement ready · ${imp.failedPages?.length ?? 0} page${imp.failedPages?.length !== 1 ? 's' : ''} failed`
-                : `Bank statement ready to review`
+                ? `ready · ${imp.failedPages?.length ?? 0} page${imp.failedPages?.length !== 1 ? 's' : ''} failed`
+                : 'ready to review'
               }
-            </p>
-            <span className="font-outfit text-[12px] text-[#B8955A] bg-[#B8955A]/15 px-2 py-0.5 rounded-full">
+            </motion.button>
+            <motion.button
+              whileTap={{ scale: 0.97 }}
+              onClick={() => setReviewingImport(imp)}
+              className="font-outfit text-[12px] text-[#B8955A] bg-[#B8955A]/15 px-2 py-0.5 rounded-full flex-shrink-0"
+            >
               Review
-            </span>
-          </motion.button>
+            </motion.button>
+            <button
+              onClick={() => deleteImport(imp.id, householdId!).catch(console.warn)}
+              className="w-7 h-7 rounded-full bg-[#B8955A]/15 flex items-center justify-center flex-shrink-0"
+            >
+              <X size={13} className="text-[#B8955A]" />
+            </button>
+          </motion.div>
         </div>
       ))}
 
