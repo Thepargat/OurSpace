@@ -9,7 +9,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Plus, Search, X, ChevronLeft, ChevronRight, MoreHorizontal,
   TrendingUp, TrendingDown, Minus, Check, Trash2,
-  Loader2, ChevronDown, Eye
+  Loader2, ChevronDown, Eye, BarChart2, Wallet, LayoutGrid, Compass
 } from 'lucide-react';
 import { useAuth } from '../AuthWrapper';
 import { db, storage } from '../../firebase';
@@ -26,6 +26,7 @@ import { useCurrencyCountUp, SPRING_DEFAULT, SPRING_BOUNCY, haptic, fireCelebrat
 import { buildMonthlyAggregates, forecastCategories, calculateBudgetHealth, calculateSpendVelocity, detectRecurringTransactions, calculateSavingsMomentum, formatAUD, formatCompact } from '../../lib/cashflow';
 import BankImportFlow from '../finance/BankImportFlow';
 import BankImportReview from '../finance/BankImportReview';
+import BudgetModule from '../finance/BudgetModule';
 import { resumeUnfinishedImports, deleteImport } from '../../lib/bankImport';
 import type { BankImport } from '../../lib/bankImport';
 
@@ -1014,7 +1015,7 @@ function ReviewPendingExpense({
 export default function FinancesTab() {
   const { user, householdId, userData } = useAuth();
   const resumeCalledRef = useRef(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'explorer' | 'analytics'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'budget' | 'analytics' | 'explorer'>('overview');
   const [viewMode, setViewMode] = useState<'month' | 'year'>('month');
   const [viewMonth, setViewMonth] = useState(new Date());
   const [viewYear, setViewYear] = useState(new Date().getFullYear());
@@ -1418,22 +1419,28 @@ export default function FinancesTab() {
       {/* Tabs */}
       <div className="px-5 mb-4">
         <div className="flex gap-0 bg-[#EDE8DF] rounded-2xl p-1">
-          {(['overview', 'explorer', 'analytics'] as const).map(tab => (
+          {([
+            { id: 'overview', label: 'Overview', Icon: LayoutGrid },
+            { id: 'budget', label: 'Budget', Icon: Wallet },
+            { id: 'analytics', label: 'Trends', Icon: BarChart2 },
+            { id: 'explorer', label: 'Explorer', Icon: Compass },
+          ] as const).map(({ id, label, Icon }) => (
             <motion.button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`flex-1 py-2.5 rounded-xl font-outfit text-[13px] transition-colors relative ${
-                activeTab === tab ? 'text-[#1A1A1A] font-semibold' : 'text-[#6B6560]'
+              key={id}
+              onClick={() => setActiveTab(id)}
+              className={`flex-1 py-2 rounded-xl font-outfit text-[11px] transition-colors relative flex flex-col items-center gap-0.5 ${
+                activeTab === id ? 'text-[#1A1A1A] font-semibold' : 'text-[#6B6560]'
               }`}
             >
-              {activeTab === tab && (
+              {activeTab === id && (
                 <motion.div
                   layoutId="finance-tab-indicator"
                   className="absolute inset-0 bg-[#fcf9f4] rounded-xl shadow-sm"
                   transition={SPRING_DEFAULT}
                 />
               )}
-              <span className="relative z-10 capitalize">{tab}</span>
+              <Icon size={14} className="relative z-10" />
+              <span className="relative z-10">{label}</span>
             </motion.button>
           ))}
         </div>
@@ -1869,7 +1876,19 @@ export default function FinancesTab() {
           </motion.div>
         )}
 
-        {/* ============ TAB 2: EXPLORER ============ */}
+        {/* ============ TAB 2: BUDGET ============ */}
+        {activeTab === 'budget' && (
+          <motion.div key="budget" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}>
+            <BudgetModule
+              householdId={householdId!}
+              monthExpenses={monthExpenses}
+              allExpenses={expenses}
+              viewMonth={viewMonth}
+            />
+          </motion.div>
+        )}
+
+        {/* ============ TAB 3: EXPLORER ============ */}
         {activeTab === 'explorer' && (
           <motion.div key="explorer" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}>
 
@@ -1986,7 +2005,7 @@ export default function FinancesTab() {
           </motion.div>
         )}
 
-        {/* ============ TAB 3: ANALYTICS ============ */}
+        {/* ============ TAB 4: ANALYTICS ============ */}
         {activeTab === 'analytics' && (
           <motion.div key="analytics" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}>
 
