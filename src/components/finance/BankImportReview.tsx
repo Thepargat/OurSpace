@@ -8,7 +8,7 @@
  * - Select / deselect individual transactions
  * - Confirm → moves to expenses/bankTransactions, marks import completed
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   X, Check, AlertTriangle, Loader2, RefreshCw,
@@ -46,6 +46,7 @@ export default function BankImportReview({ bankImport, onClose, onConfirmed }: P
   const { householdId, user } = useAuth();
   const [transactions, setTransactions] = useState<RawImportTx[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const seenTxIds = useRef(new Set<string>());
   const [loading, setLoading] = useState(true);
   const [confirming, setConfirming] = useState(false);
   const [retrying, setRetrying] = useState(false);
@@ -85,10 +86,15 @@ export default function BankImportReview({ bankImport, onClose, onConfirmed }: P
             } as RawImportTx;
           });
         setTransactions(txs);
-        // Auto-select everything except income that needs clarification
+        // Auto-select only brand-new transactions (never re-add user-deselected ones)
         setSelected(prev => {
           const next = new Set(prev);
-          txs.forEach(tx => { if (!prev.has(tx.id)) next.add(tx.id); });
+          txs.forEach(tx => {
+            if (!seenTxIds.current.has(tx.id)) {
+              next.add(tx.id);
+              seenTxIds.current.add(tx.id);
+            }
+          });
           return next;
         });
         setLoading(false);

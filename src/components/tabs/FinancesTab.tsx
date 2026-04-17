@@ -15,11 +15,10 @@ import { useAuth } from '../AuthWrapper';
 import { db, storage } from '../../firebase';
 import {
   collection, query, onSnapshot, addDoc, serverTimestamp,
-  orderBy, doc, deleteDoc, Timestamp, getDoc, updateDoc, setDoc, where
+  orderBy, doc, deleteDoc, Timestamp, getDoc, updateDoc, setDoc, where, deleteField
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { format, startOfMonth, subMonths, addMonths } from 'date-fns';
-import { GoogleGenerativeAI } from '@google/generative-ai';
 
 import { getCategoryDef, colors } from '../../design/tokens';
 import { categorizeItem } from '../../lib/categorization';
@@ -253,12 +252,16 @@ async function scanReceipt(file: File, householdId: string): Promise<{
     reader.readAsDataURL(file);
   });
 
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  const { GoogleGenAI } = await import('@google/genai');
+  const ai = new GoogleGenAI({ apiKey });
 
-  const result = await model.generateContent([
-    { inlineData: { mimeType: file.type as any, data: base64 } },
-    `You are an expert receipt parser. Extract ALL details from this receipt. Return ONLY valid JSON (no markdown, no comments):
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash-preview-04-17',
+    contents: [{
+      role: 'user',
+      parts: [
+        { inlineData: { mimeType: file.type, data: base64 } },
+        { text: `You are an expert receipt parser. Extract ALL details from this receipt. Return ONLY valid JSON (no markdown, no comments):
 {
   "merchantName": "exact store name from receipt",
   "date": "YYYY-MM-DD or null",
@@ -283,10 +286,13 @@ Rules:
 - subtotal: sum before tax
 - tax: tax amount (0 if not shown)
 - total: grand total including tax. If not visible, sum all items + tax
-- Do NOT include subtotal/tax/total as line items`
-  ]);
+- Do NOT include subtotal/tax/total as line items` }
+      ]
+    }],
+    config: { temperature: 0 },
+  });
 
-  const text = result.response.text().trim()
+  const text = (response.text ?? '').trim()
     .replace(/```json\n?/g, '')
     .replace(/```\n?/g, '')
     .trim();
@@ -926,7 +932,7 @@ function ReviewPendingExpense({
         merchantName: merchant.trim() || 'Unknown',
         total: parseFloat(total) || 0,
         category,
-        status: null,
+        status: deleteField(),
         budgetMonth: format(expense.date instanceof Date ? expense.date : new Date(), 'yyyy-MM'),
       });
       // Optionally save merchant to cache
@@ -1007,6 +1013,7 @@ function ReviewPendingExpense({
 // ============================================================
 export default function FinancesTab() {
   const { user, householdId, userData } = useAuth();
+  const resumeCalledRef = useRef(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'explorer' | 'analytics'>('overview');
   const [viewMode, setViewMode] = useState<'month' | 'year'>('month');
   const [viewMonth, setViewMonth] = useState(new Date());
@@ -1111,11 +1118,14 @@ export default function FinancesTab() {
       snap => {
         const imports = snap.docs.map(d => ({ id: d.id, ...d.data() } as BankImport));
         setBankImports(imports);
-        // Resume any stuck imports automatically
-        const needsResume = imports.some(i =>
-          i.status === 'extracting' || i.status === 'ai_parsing' || i.status === 'categorising'
-        );
-        if (needsResume) resumeUnfinishedImports(householdId).catch(console.warn);
+        // Resume stuck imports once per mount only (not on every snapshot update)
+        if (!resumeCalledRef.current) {
+          resumeCalledRef.current = true;
+          const needsResume = imports.some(i =>
+            i.status === 'extracting' || i.status === 'ai_parsing' || i.status === 'categorising'
+          );
+          if (needsResume) resumeUnfinishedImports(householdId).catch(console.warn);
+        }
       }
     );
 
